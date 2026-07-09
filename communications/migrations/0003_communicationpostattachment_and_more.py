@@ -16,7 +16,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('core', '0032_alter_exportablequerymodel_create_date_and_more'),
+        ('core', '0031_alter_mutationlog_client_mutation_id'),
         ('communications', '0002_activityaudience_activityaudiencemutation_and_more'),
     ]
 
