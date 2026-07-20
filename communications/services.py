@@ -9,6 +9,7 @@ the ``training`` module.
 import logging
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Count, Sum
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -26,6 +27,7 @@ from communications.models import (
     CommunicationTemplate, StakeholderList, StakeholderListEntry, LibraryAsset,
     StakeholderType, ActivityAudience, CommunicationPost, CommunicationPostAttachment,
     ActivityStatus, TERMINAL_STATUSES, AssignmentStatus, DispatchStatus,
+    ActivityCodeSequence,
 )
 from communications.validations import (
     CommunicationActivityValidation, ActivityCategoryValidation, ChannelValidation,
@@ -38,6 +40,7 @@ from communications.validations import (
 )
 
 logger = logging.getLogger(__name__)
+COMMUNICATION_CODE_PREFIX = 'COM'
 
 
 def _json_safe_save_instance(self, obj_):
@@ -171,12 +174,21 @@ class CommunicationActivityService(BaseService):
         super().__init__(user, validation_class)
 
     @register_service_signal('communications_activity_service.create')
+    @transaction.atomic
     def create(self, obj_data):
+        self._assign_code(obj_data)
         return super().create(obj_data)
 
     @register_service_signal('communications_activity_service.update')
     def update(self, obj_data):
         return super().update(obj_data)
+
+    @staticmethod
+    def _assign_code(obj_data):
+        sequence = ActivityCodeSequence.objects.select_for_update().get(prefix=COMMUNICATION_CODE_PREFIX)
+        sequence.last_number += 1
+        sequence.save()
+        obj_data['code'] = f'{COMMUNICATION_CODE_PREFIX}{sequence.last_number:08}'
 
     @register_service_signal('communications_activity_service.delete')
     def delete(self, obj_data):

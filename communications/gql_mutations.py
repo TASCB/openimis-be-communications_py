@@ -102,7 +102,7 @@ class _IdsInput(OpenIMISMutation.Input):
 # CommunicationActivity
 # ===========================================================================
 class CreateActivityInput(OpenIMISMutation.Input):
-    code = graphene.String(required=True)
+    code = graphene.String(required=False)
     title = graphene.String(required=True)
     description = graphene.String(required=False)
     objective_summary = graphene.String(required=False)

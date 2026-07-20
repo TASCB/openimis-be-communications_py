@@ -167,6 +167,17 @@ class CommunicationActivity(HistoryModel):
         return f'{self.code} - {self.title}'
 
 
+class ActivityCodeSequence(UUIDModel):
+    prefix = models.CharField(max_length=16, unique=True)
+    last_number = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'tblCommunicationActivityCodeSequence'
+
+    def __str__(self):
+        return f'{self.prefix}{self.last_number:08}'
+
+
 class ActivityChannel(HistoryModel):
     """A channel attached to an activity, carrying its own dispatch ("blast") state."""
     activity = models.ForeignKey(
