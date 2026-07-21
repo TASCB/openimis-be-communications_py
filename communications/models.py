@@ -327,14 +327,21 @@ class CommunicationPost(HistoryModel):
 
 
 class CommunicationPostAttachment(HistoryModel):
-    """A file attached to an internal feed post (view/download in the feed)."""
+    """A file attached to an internal feed post (view/download in the feed).
+
+    ``is_inline`` marks images embedded inside the post body HTML (referenced by
+    download URL). Inline images have no ``post`` until the post is saved, and are
+    kept out of the attachment-card strip shown below the post.
+    """
     post = models.ForeignKey(
-        CommunicationPost, on_delete=models.DO_NOTHING, related_name='attachments')
+        CommunicationPost, on_delete=models.DO_NOTHING, related_name='attachments',
+        blank=True, null=True)
     file_name = models.CharField(max_length=255, blank=False, null=False)
     file_type = models.CharField(max_length=100, blank=True, null=True)
     file_size = models.BigIntegerField(blank=True, null=True)
     file = models.FileField(upload_to='communications/posts/%Y/%m/', blank=True, null=True)
     description = models.TextField(blank=True, null=True)
+    is_inline = models.BooleanField(default=False)
 
     class Meta:
         indexes = [models.Index(fields=['post']), models.Index(fields=['file_type'])]

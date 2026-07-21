@@ -21,6 +21,7 @@ from core.services.utils import (
 from core.signals import register_service_signal
 
 from communications.apps import CommunicationsConfig
+from communications.sanitize import sanitize_post_html
 from communications.models import (
     CommunicationActivity, ActivityCategory, Channel, ActivityChannel,
     ActivityObjective, ActivityAssignment, ActivityAttachment, ActivityFeedback,
@@ -124,11 +125,17 @@ class CommunicationPostService(BaseService):
 
     @register_service_signal('communications_post_service.create')
     def create(self, obj_data):
-        return super().create(obj_data)
+        return super().create(self._sanitize_body(obj_data))
 
     @register_service_signal('communications_post_service.update')
     def update(self, obj_data):
-        return super().update(obj_data)
+        return super().update(self._sanitize_body(obj_data))
+
+    @staticmethod
+    def _sanitize_body(obj_data):
+        if isinstance(obj_data, dict) and 'body' in obj_data:
+            obj_data['body'] = sanitize_post_html(obj_data['body'])
+        return obj_data
 
     @register_service_signal('communications_post_service.delete')
     def delete(self, obj_data):

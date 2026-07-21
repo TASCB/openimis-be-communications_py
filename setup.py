@@ -22,6 +22,7 @@ setup(
         'django',
         'django-db-signals',
         'djangorestframework',
+        'bleach[css]',
         'openimis-be-core',
         'openimis-be-location',
     ],

@@ -324,7 +324,8 @@ class CommunicationPostGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
     def resolve_attachments(self, info):
-        return self.attachments.filter(is_deleted=False).order_by('date_created')
+        # Inline images live inside the post body HTML; keep them out of the card strip.
+        return self.attachments.filter(is_deleted=False, is_inline=False).order_by('date_created')
 
 
 # --- Non-model types -------------------------------------------------------

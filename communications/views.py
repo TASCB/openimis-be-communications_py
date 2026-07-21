@@ -117,13 +117,19 @@ class PostAttachmentUploadView(views.APIView):
     def post(self, request):
         try:
             post_id = request.data.get('post_id')
+            # is_inline images are embedded in the body HTML and uploaded while composing,
+            # before the post exists — so post_id is optional for them.
+            is_inline = request.data.get('is_inline') in ('1', 'true', 'True', True)
             upload = request.FILES.get('file')
-            if not post_id or not upload:
-                return Response({'success': False, 'error': 'post_id and file are required'}, status=400)
-            if not CommunicationPost.objects.filter(id=post_id, is_deleted=False).exists():
+            if not upload:
+                return Response({'success': False, 'error': 'file is required'}, status=400)
+            if not post_id and not is_inline:
+                return Response({'success': False, 'error': 'post_id is required'}, status=400)
+            if post_id and not CommunicationPost.objects.filter(id=post_id, is_deleted=False).exists():
                 return Response({'success': False, 'error': 'post not found'}, status=404)
             payload = {
-                'post_id': post_id,
+                'post_id': post_id or None,
+                'is_inline': is_inline,
                 'file': upload,
                 'file_name': request.data.get('file_name') or upload.name,
                 'file_type': request.data.get('file_type') or getattr(upload, 'content_type', None),
