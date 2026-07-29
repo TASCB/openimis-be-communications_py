@@ -19,6 +19,7 @@ from communications.models import (
     ActivityObjective, ActivityAssignment, ActivityAttachment, ActivityFeedback,
     CommunicationTemplate, StakeholderList, StakeholderListEntry, LibraryAsset,
     StakeholderType, ActivityAudience, CommunicationPost, CommunicationPostAttachment,
+    AnnouncementDismissal, PostType,
 )
 from communications.gql_queries import (
     CommunicationActivityGQLType, ActivityCategoryGQLType, ChannelGQLType,
@@ -52,6 +53,7 @@ from communications.gql_mutations import (
     CreateActivityAudienceMutation, UpdateActivityAudienceMutation, DeleteActivityAudienceMutation,
     CreatePostMutation, UpdatePostMutation, DeletePostMutation,
     PublishPostMutation, UnpublishPostMutation, DeletePostAttachmentMutation,
+    DismissAnnouncementMutation, SubmitPostForApprovalMutation,
 )
 
 
@@ -111,6 +113,7 @@ class Query(graphene.ObjectType):
     communication_post = OrderedDjangoFilterConnectionField(
         CommunicationPostGQLType, orderBy=graphene.List(of_type=graphene.String),
         client_mutation_id=graphene.String(), show_deleted=graphene.Boolean())
+    communication_posts_unread = graphene.List(CommunicationPostGQLType)
     communication_post_attachment = OrderedDjangoFilterConnectionField(
         CommunicationPostAttachmentGQLType, orderBy=graphene.List(of_type=graphene.String))
 
@@ -221,12 +224,29 @@ class Query(graphene.ObjectType):
         if client_mutation_id:
             wait_for_mutation(client_mutation_id)
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
+
+        # Drafts (pending approval) are visible to approvers only.
+        if not info.context.user.has_perms(CommunicationsConfig.gql_activity_approve_perms):
+            filters.append(Q(is_published=True))
         return gql_optimizer.query(
             CommunicationPost.objects.filter(*filters).order_by('-is_pinned', '-published_at', '-date_created'), info)
 
     def resolve_communication_post_attachment(self, info, **kwargs):
         _check(info.context.user, CommunicationsConfig.gql_post_search_perms)
         return gql_optimizer.query(CommunicationPostAttachment.objects.filter(is_deleted=False), info)
+
+    def resolve_communication_posts_unread(self, info, **kwargs):
+        """Published announcements the current user has not dismissed yet."""
+        if not info.context.user or info.context.user.is_anonymous:
+            return []
+        from django.db.models import Exists, OuterRef
+        dismissed = AnnouncementDismissal.objects.filter(
+            post_id=OuterRef('id'), user_id=info.context.user.id, is_deleted=False)
+        qs = (CommunicationPost.objects
+              .filter(is_deleted=False, is_published=True, post_type=PostType.ANNOUNCEMENT)
+              .exclude(Exists(dismissed))
+              .order_by('-published_at'))
+        return gql_optimizer.query(qs, info)
 
     def resolve_activity_calendar(self, info, date_from, date_to, **kwargs):
         _check(info.context.user, CommunicationsConfig.gql_dashboard_view_perms)
@@ -341,3 +361,5 @@ class Mutation(graphene.ObjectType):
     publish_communication_post = PublishPostMutation.Field()
     unpublish_communication_post = UnpublishPostMutation.Field()
     delete_communication_post_attachment = DeletePostAttachmentMutation.Field()
+    dismiss_announcement = DismissAnnouncementMutation.Field()
+    submit_post_for_approval = SubmitPostForApprovalMutation.Field()

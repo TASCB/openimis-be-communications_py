@@ -305,6 +305,7 @@ class CommunicationPostAttachmentGQLType(DjangoObjectType):
 
 class CommunicationPostGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
+    rejection_reason = graphene.String()
     attachments = graphene.List(CommunicationPostAttachmentGQLType)
 
     class Meta:
@@ -322,6 +323,11 @@ class CommunicationPostGQLType(DjangoObjectType):
             "version": ["exact"],
         }
         connection_class = ExtendedConnection
+
+    def resolve_rejection_reason(self, info):
+        if not self.json_ext:
+            return None
+        return self.json_ext.get('approval_rejection_reason')
 
     def resolve_attachments(self, info):
         # Inline images live inside the post body HTML; keep them out of the card strip.

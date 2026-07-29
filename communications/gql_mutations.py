@@ -21,11 +21,13 @@ from communications.models import (
     ActivityObjective, ActivityAssignment, ActivityAttachment, ActivityFeedback,
     CommunicationTemplate, StakeholderList, StakeholderListEntry, LibraryAsset,
     StakeholderType, ActivityAudience, CommunicationPost, CommunicationPostAttachment,
+    AnnouncementDismissal,
     CommunicationActivityMutation, ActivityCategoryMutation, ChannelMutation,
     ActivityChannelMutation, ActivityObjectiveMutation, ActivityAssignmentMutation,
     ActivityAttachmentMutation, ActivityFeedbackMutation, CommunicationTemplateMutation,
     StakeholderListMutation, StakeholderListEntryMutation, LibraryAssetMutation,
     StakeholderTypeMutation, ActivityAudienceMutation, CommunicationPostMutation,
+    AnnouncementDismissalMutation,
     ActivityStatus, ChannelType, DispatchStatus, AssignmentRole, AssignmentStatus, AssetType,
     ActivityType, StakeholderLevel, PostType,
 )
@@ -1218,3 +1220,57 @@ class DeletePostAttachmentMutation(BaseHistoryModelDeleteMutationMixin, BaseMuta
 
     class Input(_IdsInput):
         pass
+
+
+class DismissAnnouncementMutation(BaseMutation):
+    """Dismiss/read an announcement (mark as dismissed by current user)."""
+    _mutation_module = "communications"
+    _mutation_class = "DismissAnnouncementMutation"
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        if not user or not user.username:
+            raise PermissionDenied(_("User authentication required"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        from communications.services import AnnouncementDismissalService
+        post_id = data.get('post_id')
+        service = AnnouncementDismissalService(user)
+        result = service.dismiss(post_id)
+        if result.get('success'):
+            return None
+        raise PermissionDenied(result.get('message', 'Dismissal failed'))
+
+    class Input(OpenIMISMutation.Input):
+        post_id = graphene.UUID(required=True)
+
+
+class SubmitPostForApprovalMutation(BaseMutation):
+    """Submit a post for approval via the Approval Engine."""
+    _mutation_module = "communications"
+    _mutation_class = "SubmitPostForApprovalMutation"
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        if not user.has_perms(CommunicationsConfig.gql_post_create_perms):
+            raise PermissionDenied(_("Only post creators can submit for approval"))
+        post_id = data.get('post_id')
+        post = CommunicationPost.objects.filter(id=post_id, is_deleted=False).first()
+        if not post:
+            raise PermissionDenied(_("Post not found"))
+        if post.is_published:
+            raise PermissionDenied(_("Already published posts cannot be submitted"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        from communications.services import CommunicationPostService
+        post_id = data.get('post_id')
+        service = CommunicationPostService(user)
+        success = service.submit_for_approval(post_id)
+        if not success:
+            raise PermissionDenied(_("Failed to submit post for approval"))
+        return None
+
+    class Input(OpenIMISMutation.Input):
+        post_id = graphene.UUID(required=True)

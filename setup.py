@@ -25,6 +25,7 @@ setup(
         'bleach[css]',
         'openimis-be-core',
         'openimis-be-location',
+        'openimis-be-approval',
     ],
     classifiers=[
         'Environment :: Web Environment',

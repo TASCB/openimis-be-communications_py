@@ -27,6 +27,7 @@ from communications.models import (
     ActivityObjective, ActivityAssignment, ActivityAttachment, ActivityFeedback,
     CommunicationTemplate, StakeholderList, StakeholderListEntry, LibraryAsset,
     StakeholderType, ActivityAudience, CommunicationPost, CommunicationPostAttachment,
+    AnnouncementDismissal,
     ActivityStatus, TERMINAL_STATUSES, AssignmentStatus, DispatchStatus,
     ActivityCodeSequence,
 )
@@ -155,6 +156,23 @@ class CommunicationPostService(BaseService):
                     "data": model_representation(post)}
         except Exception as exc:
             return output_exception(model_name='CommunicationPost', method="set_published", exception=exc)
+
+    def submit_for_approval(self, post_id):
+        """Start the approval flow for a post; True when the request was raised."""
+        try:
+            from approval.services import ApprovalService
+        except Exception:
+            return False
+        post = CommunicationPost.objects.filter(id=post_id, is_deleted=False).first()
+        if not post or not self.user:
+            return False
+        summary = {
+            'title': post.title,
+            'post_type': post.get_post_type_display() if hasattr(post, 'get_post_type_display') else post.post_type,
+            'created_by': post.user_created.username if post.user_created else 'Unknown',
+        }
+        res = ApprovalService(self.user).request_approval(post, 'COMMUNICATION_POST_APPROVAL', summary=summary)
+        return res.get('success', False) if res else False
 
 
 # Allowed status transitions: action -> (from-states, to-state)
@@ -371,3 +389,41 @@ class ActivitySummaryService:
                                 'planned': r['planned'] or 0, 'actual': r['actual'] or 0}
                                for r in reach if r['stakeholder_type__level']],
         }
+
+
+class AnnouncementDismissalService(BaseService):
+    OBJECT_TYPE = AnnouncementDismissal
+
+    def __init__(self, user, validation_class=None):
+        super().__init__(user, validation_class)
+
+    @register_service_signal('communications_dismissal_service.dismiss')
+    def dismiss(self, post_id):
+        """Mark an announcement as dismissed by the current user."""
+        try:
+            post = CommunicationPost.objects.filter(id=post_id, is_deleted=False).first()
+            if not post:
+                return {"success": False, "message": _("communications.validation.not_found"),
+                        "detail": str(post_id)}
+            if not self.user or not self.user.username:
+                return {"success": False, "message": _("communications.validation.user_required")}
+
+            dismissal, created = AnnouncementDismissal.objects.get_or_create(
+                post_id=post_id,
+                user_id=self.user.id,
+                defaults={
+                    'is_deleted': False,
+                    'version': 1,
+                    'user_created_id': self.user.id,
+                    'user_updated_id': self.user.id,
+                }
+            )
+            if not created:
+                dismissal.dismissed_at = timezone.now()
+                dismissal.user_updated_id = self.user.id
+                dismissal.save(username=self.user.username)
+
+            return {"success": True, "message": _("communications.dismissal.success"),
+                    "data": model_representation(dismissal)}
+        except Exception as exc:
+            return output_exception(model_name='AnnouncementDismissal', method="dismiss", exception=exc)

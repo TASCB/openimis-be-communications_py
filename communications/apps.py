@@ -48,6 +48,17 @@ DEFAULT_CHANNELS = [
     ('WEB', 'Website / Portal', 'WEB'),
 ]
 
+DEFAULT_FLOWS = [
+    {
+        'code': 'COMMUNICATION_POST_APPROVAL',
+        'name': 'Communication post approval',
+        'domain': 'communications.CommunicationPost',
+        'steps': [
+            {'code': 'OFFICER', 'label': 'Communication Officer', 'required_right': '220110'},
+        ],
+    },
+]
+
 DEFAULT_CONFIG = {
     # Activity
     'gql_activity_search_perms': ['220101'],
@@ -229,6 +240,8 @@ class CommunicationsConfig(AppConfig):
         cfg = ModuleConfiguration.get_or_default(MODULE_NAME, DEFAULT_CONFIG)
         self.__load_config(cfg)
         post_migrate.connect(on_post_migrate, sender=self)
+        from communications.signals import bind_service_signals
+        bind_service_signals()
 
     @classmethod
     def __load_config(cls, cfg):
@@ -252,6 +265,10 @@ def on_post_migrate(sender, **kwargs):
             _seed_stakeholder_types(apps)
     except Exception as exc:
         logger.warning("communications: reference-data seeding skipped (%s)", exc)
+    try:
+        _seed_approval_flows(apps)
+    except Exception as exc:
+        logger.warning("communications: approval flows seeding skipped (%s)", exc)
 
 
 def _seed_admin_rights(apps):
@@ -302,3 +319,26 @@ def _seed_stakeholder_types(apps):
             StakeholderType.objects.create(
                 id=uuid.uuid4(), code=code, name=name, level=level, is_active=True,
                 version=1, user_created_id=admin.id, user_updated_id=admin.id)
+
+
+def _seed_approval_flows(apps):
+    """Seed approval flows for CommunicationPost (integration with Approval Engine)."""
+    try:
+        ApprovalFlow = apps.get_model('approval', 'ApprovalFlow')
+    except Exception:
+        logger.debug("communications: approval module not installed — skipping flow seeding")
+        return
+    User = apps.get_model('core', 'User')
+    admin = User.objects.order_by('id').first()
+    if not admin:
+        return
+    for flow in DEFAULT_FLOWS:
+        existing = ApprovalFlow.objects.filter(code=flow['code']).first()
+        if existing:
+            if getattr(existing, 'is_user_managed', False):
+                continue  # admin-customised — never overwrite from code
+        else:
+            ApprovalFlow.objects.create(
+                id=uuid.uuid4(), code=flow['code'], name=flow['name'], domain=flow['domain'],
+                is_active=True, config={'steps': flow.get('steps', [])}, version=1,
+                user_created_id=admin.id, user_updated_id=admin.id)

@@ -350,6 +350,25 @@ class CommunicationPostAttachment(HistoryModel):
         return self.file_name
 
 
+class AnnouncementDismissal(HistoryModel):
+    """Marks an announcement as read by a user, so it is shown only once."""
+    post = models.ForeignKey(
+        CommunicationPost, on_delete=models.DO_NOTHING, related_name='dismissals')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.DO_NOTHING, related_name='announcement_dismissals')
+    dismissed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['post', 'user']),
+            models.Index(fields=['user', 'dismissed_at']),
+        ]
+        unique_together = [['post', 'user']]
+
+    def __str__(self):
+        return f'{self.user.username} dismissed post {self.post.id}'
+
+
 class CommunicationTemplate(HistoryModel):
     """A reusable message template for a channel type."""
     code = models.CharField(max_length=255, blank=False, null=False)
@@ -499,3 +518,8 @@ class CommunicationPostMutation(UUIDModel, ObjectMutation):
 class CommunicationPostAttachmentMutation(UUIDModel, ObjectMutation):
     communication_post_attachment = models.ForeignKey(CommunicationPostAttachment, models.DO_NOTHING, related_name='mutations')
     mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='communication_post_attachments')
+
+
+class AnnouncementDismissalMutation(UUIDModel, ObjectMutation):
+    announcement_dismissal = models.ForeignKey(AnnouncementDismissal, models.DO_NOTHING, related_name='mutations')
+    mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='announcement_dismissals')
