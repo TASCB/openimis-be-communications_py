@@ -408,20 +408,14 @@ class AnnouncementDismissalService(BaseService):
             if not self.user or not self.user.username:
                 return {"success": False, "message": _("communications.validation.user_required")}
 
-            dismissal, created = AnnouncementDismissal.objects.get_or_create(
-                post_id=post_id,
-                user_id=self.user.id,
-                defaults={
-                    'is_deleted': False,
-                    'version': 1,
-                    'user_created_id': self.user.id,
-                    'user_updated_id': self.user.id,
-                }
-            )
-            if not created:
+            # HistoryModel needs save(username=...) for its pk + audit fields, so no get_or_create.
+            dismissal = AnnouncementDismissal.objects.filter(
+                post_id=post_id, user_id=self.user.id).first()
+            if dismissal:
                 dismissal.dismissed_at = timezone.now()
-                dismissal.user_updated_id = self.user.id
-                dismissal.save(username=self.user.username)
+            else:
+                dismissal = AnnouncementDismissal(post_id=post_id, user_id=self.user.id)
+            dismissal.save(username=self.user.username)
 
             return {"success": True, "message": _("communications.dismissal.success"),
                     "data": model_representation(dismissal)}
