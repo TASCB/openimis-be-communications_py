@@ -28,8 +28,12 @@ from communications.models import (
     StakeholderListMutation, StakeholderListEntryMutation, LibraryAssetMutation,
     StakeholderTypeMutation, ActivityAudienceMutation, CommunicationPostMutation,
     AnnouncementDismissalMutation,
+    MediaHouseCategory, MediaHouse, Journalist, ActivityMediaHouse, ActivityParticipant,
+    MediaHouseCategoryMutation, MediaHouseMutation, JournalistMutation,
+    ActivityMediaHouseMutation, ActivityParticipantMutation,
     ActivityStatus, ChannelType, DispatchStatus, AssignmentRole, AssignmentStatus, AssetType,
-    ActivityType, StakeholderLevel, PostType,
+    ActivityType, StakeholderLevel, PostType, MediaMedium, JournalistRole, CoverageType,
+    Gender, AttendanceStatus,
 )
 from communications.services import (
     CommunicationActivityService, ActivityCategoryService, ChannelService,
@@ -38,6 +42,8 @@ from communications.services import (
     StakeholderListService, StakeholderListEntryService, LibraryAssetService,
     StakeholderTypeService, ActivityAudienceService, CommunicationPostService,
     CommunicationPostAttachmentService, ConflictService,
+    MediaHouseCategoryService, MediaHouseService, JournalistService,
+    ActivityMediaHouseService, ActivityParticipantService,
 )
 
 
@@ -54,6 +60,11 @@ AssetTypeEnum = _gql_enum('CommAssetTypeInput', AssetType)
 ActivityTypeEnum = _gql_enum('CommActivityTypeInput', ActivityType)
 StakeholderLevelEnum = _gql_enum('CommStakeholderLevelInput', StakeholderLevel)
 PostTypeEnum = _gql_enum('CommPostTypeInput', PostType)
+MediaMediumEnum = _gql_enum('CommMediaMediumInput', MediaMedium)
+JournalistRoleEnum = _gql_enum('CommJournalistRoleInput', JournalistRole)
+CoverageTypeEnum = _gql_enum('CommCoverageTypeInput', CoverageType)
+GenderEnum = _gql_enum('CommGenderInput', Gender)
+AttendanceStatusEnum = _gql_enum('CommAttendanceStatusInput', AttendanceStatus)
 
 
 def _strip_client(data):
@@ -1274,3 +1285,389 @@ class SubmitPostForApprovalMutation(BaseMutation):
 
     class Input(OpenIMISMutation.Input):
         post_id = graphene.UUID(required=True)
+
+
+# ===========================================================================
+# MediaHouseCategory (medium x scope taxonomy)
+# ===========================================================================
+class CreateMediaHouseCategoryInput(OpenIMISMutation.Input):
+    code = graphene.String(required=True)
+    name = graphene.String(required=True)
+    medium = graphene.Field(MediaMediumEnum, required=False)
+    scope = graphene.Field(StakeholderLevelEnum, required=False)
+    description = graphene.String(required=False)
+    is_active = graphene.Boolean(required=False)
+
+
+class CreateMediaHouseCategoryMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "CreateMediaHouseCategoryMutation"
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_media_house_category_create_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_create(user, data, MediaHouseCategoryService, MediaHouseCategory,
+                            MediaHouseCategoryMutation, 'media_house_category')
+
+    class Input(CreateMediaHouseCategoryInput):
+        pass
+
+
+class UpdateMediaHouseCategoryMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "UpdateMediaHouseCategoryMutation"
+    _model = MediaHouseCategory
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_media_house_category_update_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_update(user, data, MediaHouseCategoryService, MediaHouseCategory,
+                            MediaHouseCategoryMutation, 'media_house_category')
+
+    class Input(CreateMediaHouseCategoryInput):
+        id = graphene.UUID(required=True)
+
+
+class DeleteMediaHouseCategoryMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "DeleteMediaHouseCategoryMutation"
+    _model = MediaHouseCategory
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_media_house_category_delete_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_delete(user, data, MediaHouseCategoryService)
+
+    class Input(_IdsInput):
+        pass
+
+
+# ===========================================================================
+# MediaHouse (registry)
+# ===========================================================================
+class CreateMediaHouseInput(OpenIMISMutation.Input):
+    # generated by the service (MH00001); accepted on update only, where it must not change
+    code = graphene.String(required=False)
+    name = graphene.String(required=True)
+    category_id = graphene.UUID(required=False)
+    location_id = graphene.Int(required=False)
+    frequency_or_channel = graphene.String(required=False)
+    language = graphene.String(required=False)
+    contact_person = graphene.String(required=False)
+    phone = graphene.String(required=False)
+    email = graphene.String(required=False)
+    primary_contact_id = graphene.UUID(required=False)
+    website = graphene.String(required=False)
+    address = graphene.String(required=False)
+    notes = graphene.String(required=False)
+    is_active = graphene.Boolean(required=False)
+
+
+class CreateMediaHouseMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "CreateMediaHouseMutation"
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_media_house_create_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_create(user, data, MediaHouseService, MediaHouse,
+                            MediaHouseMutation, 'media_house')
+
+    class Input(CreateMediaHouseInput):
+        pass
+
+
+class UpdateMediaHouseMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "UpdateMediaHouseMutation"
+    _model = MediaHouse
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_media_house_update_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_update(user, data, MediaHouseService, MediaHouse,
+                            MediaHouseMutation, 'media_house')
+
+    class Input(CreateMediaHouseInput):
+        id = graphene.UUID(required=True)
+
+
+class DeleteMediaHouseMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "DeleteMediaHouseMutation"
+    _model = MediaHouse
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_media_house_delete_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_delete(user, data, MediaHouseService)
+
+    class Input(_IdsInput):
+        pass
+
+
+# ===========================================================================
+# Journalist (registry)
+# ===========================================================================
+class CreateJournalistInput(OpenIMISMutation.Input):
+    code = graphene.String(required=False)
+    first_name = graphene.String(required=True)
+    last_name = graphene.String(required=True)
+    media_house_id = graphene.UUID(required=False)
+    is_freelance = graphene.Boolean(required=False)
+    role = graphene.Field(JournalistRoleEnum, required=False)
+    beat = graphene.String(required=False)
+    phone = graphene.String(required=False)
+    alt_phone = graphene.String(required=False)
+    email = graphene.String(required=False)
+    location_id = graphene.Int(required=False)
+    languages = graphene.String(required=False)
+    accreditation_no = graphene.String(required=False)
+    accreditation_expiry = graphene.Date(required=False)
+    notes = graphene.String(required=False)
+    is_active = graphene.Boolean(required=False)
+
+
+class CreateJournalistMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "CreateJournalistMutation"
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_journalist_create_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_create(user, data, JournalistService, Journalist,
+                            JournalistMutation, 'journalist')
+
+    class Input(CreateJournalistInput):
+        pass
+
+
+class UpdateJournalistMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "UpdateJournalistMutation"
+    _model = Journalist
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_journalist_update_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_update(user, data, JournalistService, Journalist,
+                            JournalistMutation, 'journalist')
+
+    class Input(CreateJournalistInput):
+        id = graphene.UUID(required=True)
+
+
+class DeleteJournalistMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "DeleteJournalistMutation"
+    _model = Journalist
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_journalist_delete_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_delete(user, data, JournalistService)
+
+    class Input(_IdsInput):
+        pass
+
+
+# ===========================================================================
+# ActivityMediaHouse (coverage) - rides the ACTIVITY rights band
+# ===========================================================================
+class CreateActivityMediaHouseInput(OpenIMISMutation.Input):
+    activity_id = graphene.UUID(required=True)
+    media_house_id = graphene.UUID(required=True)
+    journalist_id = graphene.UUID(required=False)
+    invited = graphene.Boolean(required=False)
+    attended = graphene.Boolean(required=False)
+    reported = graphene.Boolean(required=False)
+    coverage_date = graphene.Date(required=False)
+    coverage_type = graphene.Field(CoverageTypeEnum, required=False)
+    coverage_url = graphene.String(required=False)
+    coverage_reference = graphene.String(required=False)
+    coverage_quality = graphene.Int(required=False)
+    notes = graphene.String(required=False)
+
+
+class CreateActivityMediaHouseMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "CreateActivityMediaHouseMutation"
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_activity_update_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_create(user, data, ActivityMediaHouseService, ActivityMediaHouse,
+                            ActivityMediaHouseMutation, 'activity_media_house')
+
+    class Input(CreateActivityMediaHouseInput):
+        pass
+
+
+class UpdateActivityMediaHouseMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "UpdateActivityMediaHouseMutation"
+    _model = ActivityMediaHouse
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_activity_update_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_update(user, data, ActivityMediaHouseService, ActivityMediaHouse,
+                            ActivityMediaHouseMutation, 'activity_media_house')
+
+    class Input(CreateActivityMediaHouseInput):
+        id = graphene.UUID(required=True)
+        activity_id = graphene.UUID(required=False)
+        media_house_id = graphene.UUID(required=False)
+
+
+class DeleteActivityMediaHouseMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "DeleteActivityMediaHouseMutation"
+    _model = ActivityMediaHouse
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_activity_update_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_delete(user, data, ActivityMediaHouseService)
+
+    class Input(_IdsInput):
+        pass
+
+
+# ===========================================================================
+# ActivityParticipant (attendance register) - own rights band 19 (PII)
+# ===========================================================================
+class CreateActivityParticipantInput(OpenIMISMutation.Input):
+    activity_id = graphene.UUID(required=True)
+    full_name = graphene.String(required=True)
+    gender = graphene.Field(GenderEnum, required=False)
+    stakeholder_type_id = graphene.UUID(required=False)
+    organization = graphene.String(required=False)
+    title = graphene.String(required=False)
+    phone = graphene.String(required=False)
+    email = graphene.String(required=False)
+    location_id = graphene.Int(required=False)
+    attendance_status = graphene.Field(AttendanceStatusEnum, required=False)
+    individual_id = graphene.UUID(required=False)
+    internal_user_id = graphene.UUID(required=False)
+    notes = graphene.String(required=False)
+
+
+class CreateActivityParticipantMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "CreateActivityParticipantMutation"
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_participant_create_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_create(user, data, ActivityParticipantService, ActivityParticipant,
+                            ActivityParticipantMutation, 'activity_participant')
+
+    class Input(CreateActivityParticipantInput):
+        pass
+
+
+class UpdateActivityParticipantMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "UpdateActivityParticipantMutation"
+    _model = ActivityParticipant
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_participant_update_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_update(user, data, ActivityParticipantService, ActivityParticipant,
+                            ActivityParticipantMutation, 'activity_participant')
+
+    class Input(CreateActivityParticipantInput):
+        id = graphene.UUID(required=True)
+        activity_id = graphene.UUID(required=False)
+        full_name = graphene.String(required=False)
+
+
+class DeleteActivityParticipantMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "DeleteActivityParticipantMutation"
+    _model = ActivityParticipant
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(CommunicationsConfig.gql_participant_delete_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        return _crud_delete(user, data, ActivityParticipantService)
+
+    class Input(_IdsInput):
+        pass

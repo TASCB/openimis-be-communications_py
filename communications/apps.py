@@ -38,6 +38,13 @@ DEFAULT_STAKEHOLDER_TYPES = [
     ('LSP', 'Local Service Provider', 'COMMUNITY'),
 ]
 
+# Media-house categories: medium (what it is) x scope (how far it reaches).
+DEFAULT_MEDIA_HOUSE_CATEGORIES = [
+    ('NEWSPAPER', 'Newspaper', 'NEWSPAPER', 'NATIONAL'),
+    ('RADIO_GENERAL', 'Radio - General', 'RADIO', 'NATIONAL'),
+    ('RADIO_COMMUNITY', 'Radio - Community', 'RADIO', 'COMMUNITY'),
+]
+
 DEFAULT_CHANNELS = [
     ('EMAIL', 'Email', 'EMAIL'),
     ('SMS', 'SMS', 'SMS'),
@@ -134,6 +141,26 @@ DEFAULT_CONFIG = {
     'gql_post_update_perms': ['221503'],
     'gql_post_delete_perms': ['221504'],
     'gql_post_publish_perms': ['221505'],
+    # Media house
+    'gql_media_house_search_perms': ['221601'],
+    'gql_media_house_create_perms': ['221602'],
+    'gql_media_house_update_perms': ['221603'],
+    'gql_media_house_delete_perms': ['221604'],
+    # Media house category (taxonomy)
+    'gql_media_house_category_search_perms': ['221701'],
+    'gql_media_house_category_create_perms': ['221702'],
+    'gql_media_house_category_update_perms': ['221703'],
+    'gql_media_house_category_delete_perms': ['221704'],
+    # Journalist / media personnel
+    'gql_journalist_search_perms': ['221801'],
+    'gql_journalist_create_perms': ['221802'],
+    'gql_journalist_update_perms': ['221803'],
+    'gql_journalist_delete_perms': ['221804'],
+    # Activity participants (attendance register) — own band: holds community members' PII
+    'gql_participant_search_perms': ['221901'],
+    'gql_participant_create_perms': ['221902'],
+    'gql_participant_update_perms': ['221903'],
+    'gql_participant_delete_perms': ['221904'],
     # Conflict detection (staff double-booking) — configurable
     'conflict_check_enabled': True,
     'conflict_hard_types': ['STAFF'],
@@ -142,6 +169,7 @@ DEFAULT_CONFIG = {
     'seed_categories': True,
     'seed_channels': True,
     'seed_stakeholder_types': True,
+    'seed_media_house_categories': True,
 }
 
 ALL_RIGHTS = [
@@ -160,6 +188,10 @@ ALL_RIGHTS = [
     221301, 221302, 221303, 221304,
     221401, 221402, 221403, 221404,
     221501, 221502, 221503, 221504, 221505,
+    221601, 221602, 221603, 221604,
+    221701, 221702, 221703, 221704,
+    221801, 221802, 221803, 221804,
+    221901, 221902, 221903, 221904,
 ]
 
 
@@ -227,6 +259,22 @@ class CommunicationsConfig(AppConfig):
     gql_post_update_perms = []
     gql_post_delete_perms = []
     gql_post_publish_perms = []
+    gql_media_house_search_perms = []
+    gql_media_house_create_perms = []
+    gql_media_house_update_perms = []
+    gql_media_house_delete_perms = []
+    gql_media_house_category_search_perms = []
+    gql_media_house_category_create_perms = []
+    gql_media_house_category_update_perms = []
+    gql_media_house_category_delete_perms = []
+    gql_journalist_search_perms = []
+    gql_journalist_create_perms = []
+    gql_journalist_update_perms = []
+    gql_journalist_delete_perms = []
+    gql_participant_search_perms = []
+    gql_participant_create_perms = []
+    gql_participant_update_perms = []
+    gql_participant_delete_perms = []
     # behaviour
     conflict_check_enabled = True
     conflict_hard_types = []
@@ -234,6 +282,7 @@ class CommunicationsConfig(AppConfig):
     seed_categories = True
     seed_channels = True
     seed_stakeholder_types = True
+    seed_media_house_categories = True
 
     def ready(self):
         from core.models import ModuleConfiguration
@@ -263,6 +312,8 @@ def on_post_migrate(sender, **kwargs):
             _seed_channels(apps)
         if CommunicationsConfig.seed_stakeholder_types:
             _seed_stakeholder_types(apps)
+        if CommunicationsConfig.seed_media_house_categories:
+            _seed_media_house_categories(apps)
     except Exception as exc:
         logger.warning("communications: reference-data seeding skipped (%s)", exc)
     try:
@@ -319,6 +370,19 @@ def _seed_stakeholder_types(apps):
             StakeholderType.objects.create(
                 id=uuid.uuid4(), code=code, name=name, level=level, is_active=True,
                 version=1, user_created_id=admin.id, user_updated_id=admin.id)
+
+
+def _seed_media_house_categories(apps):
+    MediaHouseCategory = apps.get_model('communications', 'MediaHouseCategory')
+    User = apps.get_model('core', 'User')
+    admin = User.objects.order_by('id').first()
+    if not admin:
+        return
+    for code, name, medium, scope in DEFAULT_MEDIA_HOUSE_CATEGORIES:
+        if not MediaHouseCategory.objects.filter(code=code).exists():
+            MediaHouseCategory.objects.create(
+                id=uuid.uuid4(), code=code, name=name, medium=medium, scope=scope,
+                is_active=True, version=1, user_created_id=admin.id, user_updated_id=admin.id)
 
 
 def _seed_approval_flows(apps):

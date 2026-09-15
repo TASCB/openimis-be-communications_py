@@ -77,6 +77,13 @@ class ActivityType(models.TextChoices):
     ANNUAL_REPORT = 'ANNUAL_REPORT', _('Annual Report')
     COMMUNITY_AWARENESS = 'COMMUNITY_AWARENESS', _('Community Awareness Session')
     STAKEHOLDER_BRIEFING = 'STAKEHOLDER_BRIEFING', _('Stakeholder Briefing')
+    # Event formats. `category` (programme area) and this (format) are the ONLY two type axes.
+    LAUNCH = 'LAUNCH', _('Launch')
+    COMMEMORATION = 'COMMEMORATION', _('Commemoration / National Day')
+    EXHIBITION = 'EXHIBITION', _('Exhibition / Trade Fair')
+    FIELD_VISIT = 'FIELD_VISIT', _('Field Visit')
+    MEETING = 'MEETING', _('Meeting')
+    WORKSHOP = 'WORKSHOP', _('Workshop / Seminar')
     OTHER = 'OTHER', _('Other')
 
 
@@ -93,6 +100,54 @@ class PostType(models.TextChoices):
     UPDATE = 'UPDATE', _('Update')
     MEDIA_HIGHLIGHT = 'MEDIA_HIGHLIGHT', _('Media Highlight')
     NEWSLETTER = 'NEWSLETTER', _('Newsletter')
+
+
+# Rating scales are 1..RATING_MAX (ActivityFeedback.rating shipped unbounded; now validated).
+RATING_MIN = 1
+RATING_MAX = 5
+
+
+class Gender(models.TextChoices):
+    MALE = 'M', _('Male')
+    FEMALE = 'F', _('Female')
+
+
+class AttendanceStatus(models.TextChoices):
+    INVITED = 'INVITED', _('Invited')
+    CONFIRMED = 'CONFIRMED', _('Confirmed')
+    ATTENDED = 'ATTENDED', _('Attended')
+    ABSENT = 'ABSENT', _('Absent')
+    REPLACED = 'REPLACED', _('Replaced')
+
+
+class CoverageType(models.TextChoices):
+    NEWS_ARTICLE = 'NEWS_ARTICLE', _('News Article')
+    FEATURE = 'FEATURE', _('Feature / Long Form')
+    INTERVIEW = 'INTERVIEW', _('Interview')
+    BULLETIN = 'BULLETIN', _('News Bulletin')
+    TALK_SHOW = 'TALK_SHOW', _('Talk Show')
+    SOCIAL_POST = 'SOCIAL_POST', _('Social Media Post')
+    OTHER = 'OTHER', _('Other')
+
+
+class MediaMedium(models.TextChoices):
+    NEWSPAPER = 'NEWSPAPER', _('Newspaper')
+    RADIO = 'RADIO', _('Radio')
+    TV = 'TV', _('Television')
+    ONLINE = 'ONLINE', _('Online / Digital')
+    SOCIAL = 'SOCIAL', _('Social Media')
+    OTHER = 'OTHER', _('Other')
+
+
+class JournalistRole(models.TextChoices):
+    REPORTER = 'REPORTER', _('Reporter')
+    EDITOR = 'EDITOR', _('Editor')
+    PRESENTER = 'PRESENTER', _('Presenter / Anchor')
+    PRODUCER = 'PRODUCER', _('Producer')
+    CAMERA = 'CAMERA', _('Camera Operator')
+    PHOTOGRAPHER = 'PHOTOGRAPHER', _('Photographer')
+    CORRESPONDENT = 'CORRESPONDENT', _('Correspondent')
+    OTHER = 'OTHER', _('Other')
 
 
 class ActivityCategory(HistoryModel):
@@ -440,6 +495,188 @@ class LibraryAsset(HistoryModel):
         return f'{self.code} - {self.name}'
 
 
+class MediaHouseCategory(HistoryModel):
+    """Media-house classification on two independent axes: ``medium`` (what it is) and
+    ``scope`` (how far it reaches).
+
+    Kept separate so that "all radio" and "all community media" are both answerable; a
+    category row pairs them, e.g. RADIO_COMMUNITY = RADIO @ COMMUNITY.
+    """
+    code = models.CharField(max_length=255, blank=False, null=False)
+    name = models.CharField(max_length=255, blank=False, null=False)
+    medium = models.CharField(
+        max_length=20, choices=MediaMedium.choices, default=MediaMedium.OTHER)
+    scope = models.CharField(
+        max_length=20, choices=StakeholderLevel.choices, default=StakeholderLevel.NATIONAL)
+    description = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['code']), models.Index(fields=['medium']),
+                   models.Index(fields=['scope']), models.Index(fields=['is_active'])]
+
+    def __str__(self):
+        return f'{self.name} ({self.medium}/{self.scope})'
+
+
+class MediaHouse(HistoryModel):
+    """An external media organisation (newspaper, radio station, TV, online outlet)."""
+    code = models.CharField(max_length=255, blank=False, null=False)
+    name = models.CharField(max_length=255, blank=False, null=False)
+    category = models.ForeignKey(
+        MediaHouseCategory, on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='media_houses')
+    location = models.ForeignKey(
+        Location, on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='media_houses')
+    frequency_or_channel = models.CharField(max_length=100, blank=True, null=True)
+    language = models.CharField(max_length=100, blank=True, null=True)
+    # The institutional desk ('News Desk'), NOT a person. A named individual goes in the
+    # Journalist registry and is linked via `primary_contact` — never retyped here.
+    contact_person = models.CharField(max_length=255, blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    email = models.CharField(max_length=255, blank=True, null=True)
+    primary_contact = models.ForeignKey(
+        'Journalist', on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='primary_contact_for')
+    website = models.CharField(max_length=255, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['code']), models.Index(fields=['category']),
+                   models.Index(fields=['location']), models.Index(fields=['is_active']),
+                   models.Index(fields=['primary_contact'])]
+
+    def __str__(self):
+        return f'{self.code} - {self.name}'
+
+
+class Journalist(HistoryModel):
+    """A media practitioner (registry entity in its own right, not a child of MediaHouse).
+
+    Freelancers have no house and staff journalists move between houses, so affiliation is an
+    attribute of the person; past affiliations are carried by ``HistoryModel`` versioning.
+    """
+    code = models.CharField(max_length=255, blank=False, null=False)
+    first_name = models.CharField(max_length=255, blank=False, null=False)
+    last_name = models.CharField(max_length=255, blank=False, null=False)
+    media_house = models.ForeignKey(
+        MediaHouse, on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='journalists')
+    is_freelance = models.BooleanField(default=False)
+    role = models.CharField(
+        max_length=20, choices=JournalistRole.choices, default=JournalistRole.REPORTER)
+    beat = models.CharField(max_length=255, blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    alt_phone = models.CharField(max_length=50, blank=True, null=True)
+    email = models.CharField(max_length=255, blank=True, null=True)
+    location = models.ForeignKey(
+        Location, on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='journalists')
+    languages = models.CharField(max_length=255, blank=True, null=True)
+    accreditation_no = models.CharField(max_length=100, blank=True, null=True)
+    accreditation_expiry = models.DateField(blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['code']), models.Index(fields=['media_house']),
+                   models.Index(fields=['role']), models.Index(fields=['location']),
+                   models.Index(fields=['is_active'])]
+
+    def __str__(self):
+        return f'{self.code} - {self.first_name} {self.last_name}'
+
+
+class ActivityParticipant(HistoryModel):
+    """A named person on an activity's attendance register.
+
+    Deliberately simpler than ``training.TrainingParticipant``: an event is one occasion, so there
+    are no sessions, no participant categories and no QR self-check-in. Lift training's pattern if
+    self check-in is ever wanted rather than inventing a second one.
+
+    ``stakeholder_type`` is the same FK ``ActivityAudience`` uses for *planned* reach, so
+    planned-vs-actual variance per stakeholder type needs no extra machinery.
+    """
+    activity = models.ForeignKey(
+        CommunicationActivity, on_delete=models.DO_NOTHING, related_name='participants')
+    full_name = models.CharField(max_length=255, blank=False, null=False)
+    gender = models.CharField(max_length=10, choices=Gender.choices, blank=True, null=True)
+    stakeholder_type = models.ForeignKey(
+        StakeholderType, on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='activity_participants')
+    organization = models.CharField(max_length=255, blank=True, null=True)
+    title = models.CharField(max_length=255, blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    email = models.CharField(max_length=255, blank=True, null=True)
+    location = models.ForeignKey(
+        Location, on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='communication_participants')
+    attendance_status = models.CharField(
+        max_length=20, choices=AttendanceStatus.choices, default=AttendanceStatus.INVITED)
+    # Beneficiary link is SELECTED, never created — an attendance list must not mint Individuals.
+    individual = models.ForeignKey(
+        'individual.Individual', on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='communication_participations')
+    internal_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='communication_participations')
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['activity']), models.Index(fields=['gender']),
+                   models.Index(fields=['stakeholder_type']),
+                   models.Index(fields=['attendance_status']),
+                   models.Index(fields=['individual'])]
+
+    def __str__(self):
+        return f'{self.full_name} @ {self.activity_id}'
+
+
+class ActivityMediaHouse(HistoryModel):
+    """A media house invited to an activity, and what coverage actually resulted.
+
+    This is the **invite-and-coverage unit**, and the only source for the activity's
+    ``media_houses_invited`` / ``media_houses_reported`` counters. Individual reporters attending
+    are a separate concern (see the Phase-D ``ActivityJournalist`` design in
+    ``docs/MEDIA_REGISTRY_DEVELOPER_GUIDE.md``): counting them here would inflate "houses reported"
+    when one outlet sends three people.
+    """
+    activity = models.ForeignKey(
+        CommunicationActivity, on_delete=models.DO_NOTHING, related_name='media_houses')
+    media_house = models.ForeignKey(
+        MediaHouse, on_delete=models.DO_NOTHING, related_name='activity_coverage')
+    # Who filed the story; journalist performance derives from these. See the guide §12.
+    journalist = models.ForeignKey(
+        Journalist, on_delete=models.DO_NOTHING, blank=True, null=True,
+        related_name='coverage')
+    invited = models.BooleanField(default=True)
+    attended = models.BooleanField(default=False)
+    reported = models.BooleanField(default=False)
+    coverage_date = models.DateField(blank=True, null=True)
+    coverage_type = models.CharField(
+        max_length=20, choices=CoverageType.choices, blank=True, null=True)
+    coverage_url = models.CharField(max_length=500, blank=True, null=True)
+    coverage_reference = models.CharField(max_length=255, blank=True, null=True)
+    # 1..5, rated per coverage event — not a standing score on the organisation.
+    coverage_quality = models.IntegerField(blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['activity']), models.Index(fields=['media_house']),
+                   models.Index(fields=['journalist']), models.Index(fields=['reported'])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['activity', 'media_house'], condition=models.Q(is_deleted=False),
+                name='comm_activity_media_house_uniq'),
+        ]
+
+    def __str__(self):
+        return f'{self.media_house_id} @ {self.activity_id}'
+
+
 class CommunicationActivityMutation(UUIDModel, ObjectMutation):
     communication_activity = models.ForeignKey(CommunicationActivity, models.DO_NOTHING, related_name='mutations')
     mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='communication_activities')
@@ -523,3 +760,28 @@ class CommunicationPostAttachmentMutation(UUIDModel, ObjectMutation):
 class AnnouncementDismissalMutation(UUIDModel, ObjectMutation):
     announcement_dismissal = models.ForeignKey(AnnouncementDismissal, models.DO_NOTHING, related_name='mutations')
     mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='announcement_dismissals')
+
+
+class MediaHouseCategoryMutation(UUIDModel, ObjectMutation):
+    media_house_category = models.ForeignKey(MediaHouseCategory, models.DO_NOTHING, related_name='mutations')
+    mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='media_house_categories')
+
+
+class MediaHouseMutation(UUIDModel, ObjectMutation):
+    media_house = models.ForeignKey(MediaHouse, models.DO_NOTHING, related_name='mutations')
+    mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='media_houses')
+
+
+class JournalistMutation(UUIDModel, ObjectMutation):
+    journalist = models.ForeignKey(Journalist, models.DO_NOTHING, related_name='mutations')
+    mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='journalists')
+
+
+class ActivityMediaHouseMutation(UUIDModel, ObjectMutation):
+    activity_media_house = models.ForeignKey(ActivityMediaHouse, models.DO_NOTHING, related_name='mutations')
+    mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='activity_media_houses')
+
+
+class ActivityParticipantMutation(UUIDModel, ObjectMutation):
+    activity_participant = models.ForeignKey(ActivityParticipant, models.DO_NOTHING, related_name='mutations')
+    mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='activity_participants')

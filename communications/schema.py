@@ -20,6 +20,7 @@ from communications.models import (
     CommunicationTemplate, StakeholderList, StakeholderListEntry, LibraryAsset,
     StakeholderType, ActivityAudience, CommunicationPost, CommunicationPostAttachment,
     AnnouncementDismissal, PostType,
+    MediaHouseCategory, MediaHouse, Journalist, ActivityMediaHouse, ActivityParticipant,
 )
 from communications.gql_queries import (
     CommunicationActivityGQLType, ActivityCategoryGQLType, ChannelGQLType,
@@ -31,6 +32,8 @@ from communications.gql_queries import (
     ActivityConflictGQLType, ActivitySummaryGQLType,
     CommStatusCountGQLType, CommCategoryCountGQLType, CommChannelCountGQLType,
     CommTypeCountGQLType, CommReachGQLType,
+    MediaHouseCategoryGQLType, MediaHouseGQLType, JournalistGQLType,
+    ActivityMediaHouseGQLType, ActivityParticipantGQLType,
 )
 from communications.services import ConflictService, ActivitySummaryService
 from communications.gql_mutations import (
@@ -54,6 +57,14 @@ from communications.gql_mutations import (
     CreatePostMutation, UpdatePostMutation, DeletePostMutation,
     PublishPostMutation, UnpublishPostMutation, DeletePostAttachmentMutation,
     DismissAnnouncementMutation, SubmitPostForApprovalMutation,
+    CreateMediaHouseCategoryMutation, UpdateMediaHouseCategoryMutation,
+    DeleteMediaHouseCategoryMutation,
+    CreateMediaHouseMutation, UpdateMediaHouseMutation, DeleteMediaHouseMutation,
+    CreateJournalistMutation, UpdateJournalistMutation, DeleteJournalistMutation,
+    CreateActivityMediaHouseMutation, UpdateActivityMediaHouseMutation,
+    DeleteActivityMediaHouseMutation,
+    CreateActivityParticipantMutation, UpdateActivityParticipantMutation,
+    DeleteActivityParticipantMutation,
 )
 
 
@@ -110,6 +121,21 @@ class Query(graphene.ObjectType):
         show_deleted=graphene.Boolean())
     activity_audience = OrderedDjangoFilterConnectionField(
         ActivityAudienceGQLType, orderBy=graphene.List(of_type=graphene.String))
+    activity_participant = OrderedDjangoFilterConnectionField(
+        ActivityParticipantGQLType, orderBy=graphene.List(of_type=graphene.String))
+    activity_media_house = OrderedDjangoFilterConnectionField(
+        ActivityMediaHouseGQLType, orderBy=graphene.List(of_type=graphene.String))
+    media_house_category = OrderedDjangoFilterConnectionField(
+        MediaHouseCategoryGQLType, orderBy=graphene.List(of_type=graphene.String),
+        show_deleted=graphene.Boolean())
+    media_house = OrderedDjangoFilterConnectionField(
+        MediaHouseGQLType, orderBy=graphene.List(of_type=graphene.String),
+        client_mutation_id=graphene.String(), show_deleted=graphene.Boolean(),
+        parent_location=graphene.String(), parent_location_level=graphene.Int())
+    journalist = OrderedDjangoFilterConnectionField(
+        JournalistGQLType, orderBy=graphene.List(of_type=graphene.String),
+        client_mutation_id=graphene.String(), show_deleted=graphene.Boolean(),
+        parent_location=graphene.String(), parent_location_level=graphene.Int())
     communication_post = OrderedDjangoFilterConnectionField(
         CommunicationPostGQLType, orderBy=graphene.List(of_type=graphene.String),
         client_mutation_id=graphene.String(), show_deleted=graphene.Boolean())
@@ -216,6 +242,43 @@ class Query(graphene.ObjectType):
     def resolve_activity_audience(self, info, **kwargs):
         _check(info.context.user, CommunicationsConfig.gql_audience_search_perms)
         return gql_optimizer.query(ActivityAudience.objects.filter(is_deleted=False), info)
+
+    def resolve_activity_participant(self, info, **kwargs):
+        _check(info.context.user, CommunicationsConfig.gql_participant_search_perms)
+        return gql_optimizer.query(ActivityParticipant.objects.filter(is_deleted=False), info)
+
+    def resolve_activity_media_house(self, info, **kwargs):
+        _check(info.context.user, CommunicationsConfig.gql_activity_search_perms)
+        return gql_optimizer.query(ActivityMediaHouse.objects.filter(is_deleted=False), info)
+
+    def resolve_media_house_category(self, info, **kwargs):
+        _check(info.context.user, CommunicationsConfig.gql_media_house_category_search_perms)
+        filters = [] if kwargs.get('show_deleted') else [Q(is_deleted=False)]
+        return gql_optimizer.query(MediaHouseCategory.objects.filter(*filters), info)
+
+    def resolve_media_house(self, info, **kwargs):
+        _check(info.context.user, CommunicationsConfig.gql_media_house_search_perms)
+        filters = [] if kwargs.get('show_deleted') else [Q(is_deleted=False)]
+        client_mutation_id = kwargs.get("client_mutation_id")
+        if client_mutation_id:
+            wait_for_mutation(client_mutation_id)
+            filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
+        pl, pll = kwargs.get('parent_location'), kwargs.get('parent_location_level')
+        if pl is not None and pll is not None:
+            filters.append(_location_filter(pl, pll))
+        return gql_optimizer.query(MediaHouse.objects.filter(*filters).distinct(), info)
+
+    def resolve_journalist(self, info, **kwargs):
+        _check(info.context.user, CommunicationsConfig.gql_journalist_search_perms)
+        filters = [] if kwargs.get('show_deleted') else [Q(is_deleted=False)]
+        client_mutation_id = kwargs.get("client_mutation_id")
+        if client_mutation_id:
+            wait_for_mutation(client_mutation_id)
+            filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
+        pl, pll = kwargs.get('parent_location'), kwargs.get('parent_location_level')
+        if pl is not None and pll is not None:
+            filters.append(_location_filter(pl, pll))
+        return gql_optimizer.query(Journalist.objects.filter(*filters).distinct(), info)
 
     def resolve_communication_post(self, info, **kwargs):
         _check(info.context.user, CommunicationsConfig.gql_post_search_perms)
@@ -346,6 +409,26 @@ class Mutation(graphene.ObjectType):
     update_library_asset = UpdateLibraryAssetMutation.Field()
     delete_library_asset = DeleteLibraryAssetMutation.Field()
     delete_activity_attachment = DeleteActivityAttachmentMutation.Field()
+
+    create_activity_participant = CreateActivityParticipantMutation.Field()
+    update_activity_participant = UpdateActivityParticipantMutation.Field()
+    delete_activity_participant = DeleteActivityParticipantMutation.Field()
+
+    create_activity_media_house = CreateActivityMediaHouseMutation.Field()
+    update_activity_media_house = UpdateActivityMediaHouseMutation.Field()
+    delete_activity_media_house = DeleteActivityMediaHouseMutation.Field()
+
+    create_media_house_category = CreateMediaHouseCategoryMutation.Field()
+    update_media_house_category = UpdateMediaHouseCategoryMutation.Field()
+    delete_media_house_category = DeleteMediaHouseCategoryMutation.Field()
+
+    create_media_house = CreateMediaHouseMutation.Field()
+    update_media_house = UpdateMediaHouseMutation.Field()
+    delete_media_house = DeleteMediaHouseMutation.Field()
+
+    create_journalist = CreateJournalistMutation.Field()
+    update_journalist = UpdateJournalistMutation.Field()
+    delete_journalist = DeleteJournalistMutation.Field()
 
     create_stakeholder_type = CreateStakeholderTypeMutation.Field()
     update_stakeholder_type = UpdateStakeholderTypeMutation.Field()

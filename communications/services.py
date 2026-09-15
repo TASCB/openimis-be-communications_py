@@ -10,7 +10,7 @@ import logging
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Avg, Count, Sum
 from django.utils import timezone
 from django.utils.translation import gettext as _
 
@@ -28,6 +28,8 @@ from communications.models import (
     CommunicationTemplate, StakeholderList, StakeholderListEntry, LibraryAsset,
     StakeholderType, ActivityAudience, CommunicationPost, CommunicationPostAttachment,
     AnnouncementDismissal,
+    MediaHouseCategory, MediaHouse, Journalist, ActivityMediaHouse, ActivityParticipant,
+    AttendanceStatus,
     ActivityStatus, TERMINAL_STATUSES, AssignmentStatus, DispatchStatus,
     ActivityCodeSequence,
 )
@@ -39,10 +41,28 @@ from communications.validations import (
     StakeholderListEntryValidation, LibraryAssetValidation,
     StakeholderTypeValidation, ActivityAudienceValidation, CommunicationPostValidation,
     CommunicationPostAttachmentValidation,
+    MediaHouseCategoryValidation, MediaHouseValidation, JournalistValidation,
+    ActivityMediaHouseValidation, ActivityParticipantValidation,
 )
 
 logger = logging.getLogger(__name__)
 COMMUNICATION_CODE_PREFIX = 'COM'
+MEDIA_HOUSE_CODE_PREFIX = 'MH'
+JOURNALIST_CODE_PREFIX = 'MJ'
+REGISTRY_CODE_WIDTH = 5
+
+
+def _next_registry_code(prefix, width=REGISTRY_CODE_WIDTH):
+    """Next ``<PREFIX><zero-padded>`` code, reusing the activity code-sequence table.
+
+    ``prefix`` is unique on that table, so each registry gets its own counter. Caller must be
+    inside a transaction: the row is locked for the read-modify-write.
+    """
+    sequence, _created = ActivityCodeSequence.objects.select_for_update().get_or_create(
+        prefix=prefix, defaults={'last_number': 0})
+    sequence.last_number += 1
+    sequence.save()
+    return f'{prefix}{sequence.last_number:0{width}}'
 
 
 def _json_safe_save_instance(self, obj_):
@@ -111,11 +131,224 @@ LibraryAssetService = _crud_service(
     'LibraryAssetService', LibraryAsset, LibraryAssetValidation, 'communications_library_service')
 StakeholderTypeService = _crud_service(
     'StakeholderTypeService', StakeholderType, StakeholderTypeValidation, 'communications_stakeholder_type_service')
-ActivityAudienceService = _crud_service(
-    'ActivityAudienceService', ActivityAudience, ActivityAudienceValidation, 'communications_audience_service')
 CommunicationPostAttachmentService = _crud_service(
     'CommunicationPostAttachmentService', CommunicationPostAttachment,
     CommunicationPostAttachmentValidation, 'communications_post_attachment_service')
+MediaHouseCategoryService = _crud_service(
+    'MediaHouseCategoryService', MediaHouseCategory, MediaHouseCategoryValidation,
+    'communications_media_house_category_service')
+class MediaHouseService(BaseService):
+    """Media-house registry. Codes are system-generated (``MH00001``), never user-supplied."""
+    OBJECT_TYPE = MediaHouse
+
+    def __init__(self, user, validation_class=MediaHouseValidation):
+        super().__init__(user, validation_class)
+
+    @register_service_signal('communications_media_house_service.create')
+    @transaction.atomic
+    def create(self, obj_data):
+        if not obj_data.get('code'):
+            obj_data['code'] = _next_registry_code(MEDIA_HOUSE_CODE_PREFIX)
+        return super().create(obj_data)
+
+    @register_service_signal('communications_media_house_service.update')
+    def update(self, obj_data):
+        return super().update(obj_data)
+
+    @register_service_signal('communications_media_house_service.delete')
+    def delete(self, obj_data):
+        return super().delete(obj_data)
+
+
+class JournalistService(BaseService):
+    """Journalist registry. A person has no natural code, so one is generated (``MJ00001``)."""
+    OBJECT_TYPE = Journalist
+
+    def __init__(self, user, validation_class=JournalistValidation):
+        super().__init__(user, validation_class)
+
+    @register_service_signal('communications_journalist_service.create')
+    @transaction.atomic
+    def create(self, obj_data):
+        if not obj_data.get('code'):
+            obj_data['code'] = _next_registry_code(JOURNALIST_CODE_PREFIX)
+        return super().create(obj_data)
+
+    @register_service_signal('communications_journalist_service.update')
+    def update(self, obj_data):
+        return super().update(obj_data)
+
+    @register_service_signal('communications_journalist_service.delete')
+    def delete(self, obj_data):
+        return super().delete(obj_data)
+
+
+def recompute_media_counters(activity_id):
+    """Derive an activity's media counters from its ActivityMediaHouse rows.
+
+    Only overwrites while rows exist. With no rows the typed values stand, so activities
+    captured before the registry existed keep their hand-entered numbers and no dashboard
+    silently drops to zero.
+    """
+    rows = ActivityMediaHouse.objects.filter(activity_id=activity_id, is_deleted=False)
+    if not rows.exists():
+        return None
+    invited = rows.filter(invited=True).count()
+    reported = rows.filter(reported=True).count()
+    CommunicationActivity.objects.filter(id=activity_id).update(
+        media_houses_invited=invited, media_houses_reported=reported)
+    return invited, reported
+
+
+def recompute_planned_audience(activity_id):
+    """Derive an activity's ``planned_audience_count`` from its Audience rows.
+
+    The Audience tab already records planned reach per stakeholder type; a second free-typed
+    total on the form could only ever disagree with it. Same rule as the other derived counters:
+    only overwrites while rows exist, so activities without an audience breakdown keep the
+    figure someone typed.
+    """
+    rows = ActivityAudience.objects.filter(activity_id=activity_id, is_deleted=False)
+    if not rows.exists():
+        return None
+    planned = rows.aggregate(s=Sum('planned_count'))['s'] or 0
+    CommunicationActivity.objects.filter(id=activity_id).update(planned_audience_count=planned)
+    return planned
+
+
+class ActivityAudienceService(BaseService):
+    """Planned reach per stakeholder type. Every write re-derives the activity's planned total."""
+    OBJECT_TYPE = ActivityAudience
+
+    def __init__(self, user, validation_class=ActivityAudienceValidation):
+        super().__init__(user, validation_class)
+
+    @register_service_signal('communications_audience_service.create')
+    @transaction.atomic
+    def create(self, obj_data):
+        res = super().create(obj_data)
+        if res['success']:
+            recompute_planned_audience(obj_data.get('activity_id'))
+        return res
+
+    @register_service_signal('communications_audience_service.update')
+    @transaction.atomic
+    def update(self, obj_data):
+        res = super().update(obj_data)
+        if res['success']:
+            self._recompute_for(obj_data.get('id'))
+        return res
+
+    @register_service_signal('communications_audience_service.delete')
+    @transaction.atomic
+    def delete(self, obj_data):
+        row = ActivityAudience.objects.filter(id=obj_data.get('id')).only('activity_id').first()
+        activity_id = row.activity_id if row else None
+        res = super().delete(obj_data)
+        if res['success'] and activity_id:
+            recompute_planned_audience(activity_id)
+        return res
+
+    @staticmethod
+    def _recompute_for(row_id):
+        row = ActivityAudience.objects.filter(id=row_id).only('activity_id').first()
+        if row:
+            recompute_planned_audience(row.activity_id)
+
+
+def recompute_participant_count(activity_id):
+    """Derive an activity's ``actual_audience_count`` from its attendance register.
+
+    Same rule as the media counters: only overwrites while rows exist, so activities recorded
+    before the register existed keep their hand-entered figure.
+    """
+    rows = ActivityParticipant.objects.filter(activity_id=activity_id, is_deleted=False)
+    if not rows.exists():
+        return None
+    attended = rows.filter(attendance_status=AttendanceStatus.ATTENDED).count()
+    CommunicationActivity.objects.filter(id=activity_id).update(actual_audience_count=attended)
+    return attended
+
+
+class ActivityParticipantService(BaseService):
+    """Attendance register. Every write re-derives the parent activity's actual count."""
+    OBJECT_TYPE = ActivityParticipant
+
+    def __init__(self, user, validation_class=ActivityParticipantValidation):
+        super().__init__(user, validation_class)
+
+    @register_service_signal('communications_participant_service.create')
+    @transaction.atomic
+    def create(self, obj_data):
+        res = super().create(obj_data)
+        if res['success']:
+            recompute_participant_count(obj_data.get('activity_id'))
+        return res
+
+    @register_service_signal('communications_participant_service.update')
+    @transaction.atomic
+    def update(self, obj_data):
+        res = super().update(obj_data)
+        if res['success']:
+            self._recompute_for(obj_data.get('id'))
+        return res
+
+    @register_service_signal('communications_participant_service.delete')
+    @transaction.atomic
+    def delete(self, obj_data):
+        row = ActivityParticipant.objects.filter(id=obj_data.get('id')).only('activity_id').first()
+        activity_id = row.activity_id if row else None
+        res = super().delete(obj_data)
+        if res['success'] and activity_id:
+            recompute_participant_count(activity_id)
+        return res
+
+    @staticmethod
+    def _recompute_for(row_id):
+        row = ActivityParticipant.objects.filter(id=row_id).only('activity_id').first()
+        if row:
+            recompute_participant_count(row.activity_id)
+
+
+class ActivityMediaHouseService(BaseService):
+    """Per-activity media coverage. Every write re-derives the parent activity's counters."""
+    OBJECT_TYPE = ActivityMediaHouse
+
+    def __init__(self, user, validation_class=ActivityMediaHouseValidation):
+        super().__init__(user, validation_class)
+
+    @register_service_signal('communications_activity_media_house_service.create')
+    @transaction.atomic
+    def create(self, obj_data):
+        res = super().create(obj_data)
+        if res['success']:
+            recompute_media_counters(obj_data.get('activity_id'))
+        return res
+
+    @register_service_signal('communications_activity_media_house_service.update')
+    @transaction.atomic
+    def update(self, obj_data):
+        res = super().update(obj_data)
+        if res['success']:
+            self._recompute_for(obj_data.get('id'))
+        return res
+
+    @register_service_signal('communications_activity_media_house_service.delete')
+    @transaction.atomic
+    def delete(self, obj_data):
+        # read the parent before the row is soft-deleted
+        row = ActivityMediaHouse.objects.filter(id=obj_data.get('id')).only('activity_id').first()
+        activity_id = row.activity_id if row else None
+        res = super().delete(obj_data)
+        if res['success'] and activity_id:
+            recompute_media_counters(activity_id)
+        return res
+
+    @staticmethod
+    def _recompute_for(row_id):
+        row = ActivityMediaHouse.objects.filter(id=row_id).only('activity_id').first()
+        if row:
+            recompute_media_counters(row.activity_id)
 
 
 class CommunicationPostService(BaseService):
@@ -362,6 +595,33 @@ class ActivitySummaryService:
         by_type = list(qs.values('activity_type').order_by('activity_type').annotate(count=Count('id')))
         # Media impact (houses invited vs reported)
         media = qs.aggregate(invited=Sum('media_houses_invited'), reported=Sum('media_houses_reported'))
+        # Planned (ActivityAudience) vs attended (ActivityParticipant) share a StakeholderType FK.
+        parts = ActivityParticipant.objects.filter(is_deleted=False, activity__in=qs)
+        participants_total = parts.count()
+        participants_attended = parts.filter(attendance_status=AttendanceStatus.ATTENDED).count()
+        by_gender = list(parts.filter(attendance_status=AttendanceStatus.ATTENDED)
+                         .values('gender').order_by('gender').annotate(count=Count('id')))
+        attended_by_type = {
+            r['stakeholder_type_id']: r['count'] for r in
+            parts.filter(attendance_status=AttendanceStatus.ATTENDED)
+                 .values('stakeholder_type_id').annotate(count=Count('id'))
+        }
+        planned_by_type = list(ActivityAudience.objects
+                               .filter(is_deleted=False, activity__in=qs)
+                               .values('stakeholder_type_id', 'stakeholder_type__name')
+                               .order_by('stakeholder_type__name')
+                               .annotate(planned=Sum('planned_count')))
+        # Sourced from ActivityMediaHouse, so these reflect registry-using activities only.
+        coverage = ActivityMediaHouse.objects.filter(is_deleted=False, activity__in=qs)
+        invited_rows = coverage.filter(invited=True).count()
+        reported_rows = coverage.filter(reported=True).count()
+        by_medium = list(coverage.filter(reported=True)
+                         .values('media_house__category__medium')
+                         .order_by('media_house__category__medium').annotate(count=Count('id')))
+        by_scope = list(coverage.filter(reported=True)
+                        .values('media_house__category__scope')
+                        .order_by('media_house__category__scope').annotate(count=Count('id')))
+        avg_quality = coverage.filter(coverage_quality__isnull=False).aggregate(a=Avg('coverage_quality'))['a']
         # Audience reach aggregated by stakeholder level (planned vs actual)
         reach = list(ActivityAudience.objects
                      .filter(is_deleted=False, activity__in=qs)
@@ -385,6 +645,26 @@ class ActivitySummaryService:
                              'category_name': r['category__name'], 'count': r['count']} for r in by_category],
             'by_channel': [{'channel_type': r['channel__channel_type'], 'count': r['count']} for r in by_channel],
             'by_type': [{'activity_type': r['activity_type'], 'count': r['count']} for r in by_type],
+            'participants_total': participants_total,
+            'participants_attended': participants_attended,
+            'attendance_rate': (round(participants_attended * 100.0 / participants_total, 1)
+                                if participants_total else 0.0),
+            'participants_by_gender': [{'gender': r['gender'], 'count': r['count']}
+                                       for r in by_gender if r['gender']],
+            'participants_by_stakeholder': [
+                {'stakeholder_type_id': str(r['stakeholder_type_id']) if r['stakeholder_type_id'] else None,
+                 'stakeholder_name': r['stakeholder_type__name'],
+                 'planned': r['planned'] or 0,
+                 'attended': attended_by_type.get(r['stakeholder_type_id'], 0)}
+                for r in planned_by_type if r['stakeholder_type_id']],
+            'coverage_invited': invited_rows,
+            'coverage_reported': reported_rows,
+            'coverage_rate': round(reported_rows * 100.0 / invited_rows, 1) if invited_rows else 0.0,
+            'avg_coverage_quality': round(avg_quality, 2) if avg_quality is not None else None,
+            'coverage_by_medium': [{'medium': r['media_house__category__medium'], 'count': r['count']}
+                                   for r in by_medium if r['media_house__category__medium']],
+            'coverage_by_scope': [{'scope': r['media_house__category__scope'], 'count': r['count']}
+                                  for r in by_scope if r['media_house__category__scope']],
             'reach_by_level': [{'level': r['stakeholder_type__level'],
                                 'planned': r['planned'] or 0, 'actual': r['actual'] or 0}
                                for r in reach if r['stakeholder_type__level']],
