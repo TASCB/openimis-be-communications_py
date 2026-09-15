@@ -15,12 +15,17 @@ logger = logging.getLogger(__name__)
 MODULE_NAME = 'communications'
 IMIS_ADMINISTRATOR_SYSTEM = 64
 
+# Programme areas, from the client's MODULE doc (2026-09-15). The earlier
+# Media Engagement / Content & Reporting / Outreach set was a placeholder; it is deactivated
+# rather than deleted because existing activities reference it.
 DEFAULT_CATEGORIES = [
-    ('MEDIA_ENGAGEMENT', 'Media Engagement'),
-    ('CONTENT_REPORTING', 'Content & Reporting'),
-    ('OUTREACH', 'Outreach'),
+    ('PCT', 'PCT'),
+    ('SCPW', 'SCPW'),
+    ('EPAYMENT', 'E-payment'),
+    ('ECONOMIC_INCLUSION', 'Economic Inclusion'),
     ('GENERAL', 'General'),
 ]
+SUPERSEDED_CATEGORIES = ['MEDIA_ENGAGEMENT', 'CONTENT_REPORTING', 'OUTREACH']
 
 # Multi-level stakeholder taxonomy (the "Who").
 DEFAULT_STAKEHOLDER_TYPES = [
@@ -36,6 +41,18 @@ DEFAULT_STAKEHOLDER_TYPES = [
     ('VILLAGE_COUNCIL', 'Village Council', 'COMMUNITY'),
     ('CMC', 'Community Management Committee', 'COMMUNITY'),
     ('LSP', 'Local Service Provider', 'COMMUNITY'),
+    # Communication audiences (MODULE doc: "Defining Audiences of Communication Activities")
+    ('EDITOR', 'Editor', 'NATIONAL'),
+    ('JOURNALIST', 'Journalist', 'NATIONAL'),
+    ('FREELANCER', 'Freelance Journalist', 'NATIONAL'),
+    ('PRESS_CLUB', 'Press Club Member', 'REGIONAL'),
+    ('PARLIAMENTARY_COMMITTEE', 'Parliamentary Committee', 'NATIONAL'),
+    # Participant categories (MODULE doc: "Category of Participants")
+    ('STAFF', 'Staff', 'NATIONAL'),
+    ('PUBLIC', 'General Public', 'COMMUNITY'),
+    ('BENEFICIARIES', 'Beneficiaries', 'COMMUNITY'),
+    ('DEVELOPMENT_PARTNERS', 'Development Partners', 'NATIONAL'),
+    ('HIGH_LEVEL_GOVT', 'High Level Government Officials', 'NATIONAL'),
 ]
 
 # Media-house categories: medium (what it is) x scope (how far it reaches).
@@ -43,6 +60,10 @@ DEFAULT_MEDIA_HOUSE_CATEGORIES = [
     ('NEWSPAPER', 'Newspaper', 'NEWSPAPER', 'NATIONAL'),
     ('RADIO_GENERAL', 'Radio - General', 'RADIO', 'NATIONAL'),
     ('RADIO_COMMUNITY', 'Radio - Community', 'RADIO', 'COMMUNITY'),
+    ('TV', 'Television', 'TV', 'NATIONAL'),
+    ('WEBSITE', 'Website', 'WEBSITE', 'NATIONAL'),
+    ('BLOG', 'Blog', 'BLOG', 'NATIONAL'),
+    ('RADIO_ZONAL', 'Community Radio - Zonal', 'RADIO', 'ZONAL'),
 ]
 
 DEFAULT_CHANNELS = [
@@ -308,6 +329,7 @@ def on_post_migrate(sender, **kwargs):
     try:
         if CommunicationsConfig.seed_categories:
             _seed_categories(apps)
+            _deactivate_superseded_categories(apps)
         if CommunicationsConfig.seed_channels:
             _seed_channels(apps)
         if CommunicationsConfig.seed_stakeholder_types:
@@ -344,6 +366,11 @@ def _seed_categories(apps):
             ActivityCategory.objects.create(
                 id=uuid.uuid4(), code=code, name=name, is_active=True, version=1,
                 user_created_id=admin.id, user_updated_id=admin.id)
+
+
+def _deactivate_superseded_categories(apps):
+    ActivityCategory = apps.get_model('communications', 'ActivityCategory')
+    ActivityCategory.objects.filter(code__in=SUPERSEDED_CATEGORIES, is_active=True).update(is_active=False)
 
 
 def _seed_channels(apps):

@@ -77,18 +77,25 @@ class ActivityType(models.TextChoices):
     ANNUAL_REPORT = 'ANNUAL_REPORT', _('Annual Report')
     COMMUNITY_AWARENESS = 'COMMUNITY_AWARENESS', _('Community Awareness Session')
     STAKEHOLDER_BRIEFING = 'STAKEHOLDER_BRIEFING', _('Stakeholder Briefing')
-    # Event formats. `category` (programme area) and this (format) are the ONLY two type axes.
-    LAUNCH = 'LAUNCH', _('Launch')
-    COMMEMORATION = 'COMMEMORATION', _('Commemoration / National Day')
-    EXHIBITION = 'EXHIBITION', _('Exhibition / Trade Fair')
-    FIELD_VISIT = 'FIELD_VISIT', _('Field Visit')
-    MEETING = 'MEETING', _('Meeting')
-    WORKSHOP = 'WORKSHOP', _('Workshop / Seminar')
+    # From the client's Communication Budget (MODULE doc, 2026-09-15).
+    BRANDING = 'BRANDING', _('Branding')
+    EVENT = 'EVENT', _('Event')
+    INTERNAL_COMMUNICATION = 'INTERNAL_COMMUNICATION', _('Internal Communication')
+    PUBLICATION = 'PUBLICATION', _('Publication / Communication Materials')
+    SOCIAL_MEDIA = 'SOCIAL_MEDIA', _('Social Media')
+    MEDIA_HOUSE_VISIT = 'MEDIA_HOUSE_VISIT', _('Visit to Media Houses')
     OTHER = 'OTHER', _('Other')
+
+
+class EventType(models.TextChoices):
+    PUBLIC = 'PUBLIC', _('Public')
+    INTERNAL = 'INTERNAL', _('Internal')
+    CSR = 'CSR', _('Corporate Social Responsibility')
 
 
 class StakeholderLevel(models.TextChoices):
     NATIONAL = 'NATIONAL', _('National')
+    ZONAL = 'ZONAL', _('Zonal')
     REGIONAL = 'REGIONAL', _('Regional')
     PAA = 'PAA', _('PAA (Project Area Authority)')
     COMMUNITY = 'COMMUNITY', _('Community')
@@ -134,7 +141,8 @@ class MediaMedium(models.TextChoices):
     NEWSPAPER = 'NEWSPAPER', _('Newspaper')
     RADIO = 'RADIO', _('Radio')
     TV = 'TV', _('Television')
-    ONLINE = 'ONLINE', _('Online / Digital')
+    WEBSITE = 'WEBSITE', _('Website')
+    BLOG = 'BLOG', _('Blog')
     SOCIAL = 'SOCIAL', _('Social Media')
     OTHER = 'OTHER', _('Other')
 
@@ -192,6 +200,9 @@ class CommunicationActivity(HistoryModel):
         related_name='activities')
     activity_type = models.CharField(
         max_length=30, choices=ActivityType.choices, default=ActivityType.OTHER)
+    # Only meaningful when activity_type is EVENT.
+    event_type = models.CharField(
+        max_length=20, choices=EventType.choices, blank=True, null=True)
     start_datetime = models.DateTimeField(blank=False, null=False)
     end_datetime = models.DateTimeField(blank=False, null=False)
     venue = models.CharField(max_length=255, blank=True, null=True)
@@ -561,7 +572,8 @@ class Journalist(HistoryModel):
     """
     code = models.CharField(max_length=255, blank=False, null=False)
     first_name = models.CharField(max_length=255, blank=False, null=False)
-    last_name = models.CharField(max_length=255, blank=False, null=False)
+    last_name = models.CharField(max_length=255, blank=True, null=True)
+    gender = models.CharField(max_length=10, choices=Gender.choices, blank=True, null=True)
     media_house = models.ForeignKey(
         MediaHouse, on_delete=models.DO_NOTHING, blank=True, null=True,
         related_name='journalists')
@@ -584,7 +596,7 @@ class Journalist(HistoryModel):
     class Meta:
         indexes = [models.Index(fields=['code']), models.Index(fields=['media_house']),
                    models.Index(fields=['role']), models.Index(fields=['location']),
-                   models.Index(fields=['is_active'])]
+                   models.Index(fields=['gender']), models.Index(fields=['is_active'])]
 
     def __str__(self):
         return f'{self.code} - {self.first_name} {self.last_name}'

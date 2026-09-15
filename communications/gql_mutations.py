@@ -33,7 +33,7 @@ from communications.models import (
     ActivityMediaHouseMutation, ActivityParticipantMutation,
     ActivityStatus, ChannelType, DispatchStatus, AssignmentRole, AssignmentStatus, AssetType,
     ActivityType, StakeholderLevel, PostType, MediaMedium, JournalistRole, CoverageType,
-    Gender, AttendanceStatus,
+    Gender, AttendanceStatus, EventType,
 )
 from communications.services import (
     CommunicationActivityService, ActivityCategoryService, ChannelService,
@@ -65,6 +65,7 @@ JournalistRoleEnum = _gql_enum('CommJournalistRoleInput', JournalistRole)
 CoverageTypeEnum = _gql_enum('CommCoverageTypeInput', CoverageType)
 GenderEnum = _gql_enum('CommGenderInput', Gender)
 AttendanceStatusEnum = _gql_enum('CommAttendanceStatusInput', AttendanceStatus)
+EventTypeEnum = _gql_enum('CommEventTypeInput', EventType)
 
 
 def _strip_client(data):
@@ -121,6 +122,7 @@ class CreateActivityInput(OpenIMISMutation.Input):
     objective_summary = graphene.String(required=False)
     category_id = graphene.UUID(required=False)
     activity_type = graphene.Field(ActivityTypeEnum, required=False)
+    event_type = graphene.Field(EventTypeEnum, required=False)
     start_datetime = graphene.DateTime(required=True)
     end_datetime = graphene.DateTime(required=True)
     venue = graphene.String(required=False)
@@ -1442,7 +1444,8 @@ class DeleteMediaHouseMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation
 class CreateJournalistInput(OpenIMISMutation.Input):
     code = graphene.String(required=False)
     first_name = graphene.String(required=True)
-    last_name = graphene.String(required=True)
+    last_name = graphene.String(required=False)
+    gender = graphene.Field(GenderEnum, required=False)
     media_house_id = graphene.UUID(required=False)
     is_freelance = graphene.Boolean(required=False)
     role = graphene.Field(JournalistRoleEnum, required=False)
