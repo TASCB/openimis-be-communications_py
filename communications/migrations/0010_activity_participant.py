@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ('individual', '0030_groupindividual_is_active'),
-        ('core', '0032_alter_exportablequerymodel_create_date_and_more'),
+        ('core', '0031_alter_mutationlog_client_mutation_id'),
         ('location', '0019_alter_location_code'),
         ('communications', '0009_coverage_attribution_and_primary_contact'),
     ]
