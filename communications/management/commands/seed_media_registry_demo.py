@@ -21,6 +21,7 @@ from core.models import User
 from location.models import Location
 from communications.models import (
     MediaHouseCategory, MediaHouse, Journalist, ActivityMediaHouse, CommunicationActivity,
+    ActivityCategory, ActivityObjective, ActivityAudience, StakeholderType,
 )
 from communications.services import (
     MediaHouseCategoryService, MediaHouseService, JournalistService,
@@ -45,6 +46,65 @@ DEMO_ACTIVITIES = [
     ('Njombe Community Awareness Drive', 'COMMUNITY_AWARENESS', 'Njombe', 40, 'Njombe Town'),
     ('Simanjiro Pastoralist Briefing', 'STAKEHOLDER_BRIEFING', 'Simanjiro', 28, 'Orkesumet'),
     ('Mwanza Impact Case Study Release', 'IMPACT_CASE_STUDY', 'Mwanza CC', 12, 'Mwanza City'),
+]
+
+# One activity per lifecycle status so the list, filters and previews have something to show.
+# (title, type, category, status, district, start offset in days (negative = past), days, venue,
+#  planned audience, actual audience, objectives [(description, indicator, unit, target, achieved)],
+#  audiences [(stakeholder type, planned, actual)], description)
+DEMO_PIPELINE = [
+    ('Dodoma Regional Payment Awareness Tour', 'COMMUNITY_AWARENESS', 'PAYMENT_COMMS', 'DRAFT',
+     'Dodoma CC', 45, 3, 'Dodoma Region PAAs', 600, None,
+     [('Explain the e-payment channels to beneficiaries', 'Beneficiaries reached', 'people', 600, None)],
+     [('BENEFICIARIES', 500, None), ('VEO', 60, None), ('CMC', 40, None)],
+     'Village meetings on how payments move to mobile money and bank accounts.'),
+    ('Enrollment Communication Radio Series', 'MEDIA_MISSION', 'ENROLLMENT_COMMS', 'SUBMITTED',
+     'Ilala MC', 30, 5, 'TBC FM studios', 0, None,
+     [('Air five radio episodes on enrollment', 'Episodes aired', 'episodes', 5, None),
+      ('Answer listener questions live', 'Questions answered', 'questions', 50, None)],
+     [('PUBLIC', 0, None), ('JOURNALIST', 6, None)],
+     'Weekly radio programme explaining who qualifies and how enrollment works.'),
+    ('Grievance Mechanism Stakeholder Briefing', 'STAKEHOLDER_BRIEFING', 'GRIEVANCE_COMMS', 'APPROVED',
+     'Mwanza CC', 21, 1, 'Mwanza Regional Office', 80, None,
+     [('Brief council officers on the GRM channels', 'Officers briefed', 'people', 80, None)],
+     [('DED', 8, None), ('TMO', 20, None), ('DAS', 8, None)],
+     'Half-day briefing on grievance intake, escalation and response timelines.'),
+    ('Social Media Campaign: Mafanikio ya Kaya', 'SOCIAL_MEDIA', 'PUBLIC_RELATIONS', 'REJECTED',
+     'Ilala MC', 14, 30, 'Online', 0, None,
+     [('Publish beneficiary success stories', 'Posts published', 'posts', 20, None)],
+     [('PUBLIC', 0, None)],
+     'Month-long campaign of household success stories; returned for consent forms.'),
+    ('Kigoma Community Awareness Sessions', 'COMMUNITY_AWARENESS', 'AWARENESS', 'SCHEDULED',
+     'Kigoma MC', 7, 4, 'Kigoma District villages', 900, None,
+     [('Hold awareness sessions in 12 villages', 'Villages covered', 'villages', 12, None),
+      ('Register attendance at every session', 'Attendees', 'people', 900, None)],
+     [('BENEFICIARIES', 700, None), ('VILLAGE_COUNCIL', 120, None), ('LSP', 80, None)],
+     'Sessions on programme rules, co-responsibilities and the grievance channels.'),
+    ('Arusha Media House Visits', 'MEDIA_HOUSE_VISIT', 'MEDIA_ENGAGEMENT', 'ONGOING',
+     'Arusha CC', -1, 3, 'Arusha City', 25, 18,
+     [('Visit the main Arusha newsrooms', 'Newsrooms visited', 'visits', 6, 4)],
+     [('EDITOR', 8, 6), ('JOURNALIST', 17, 12)],
+     'Newsroom visits to share the PSSN story pipeline and contact points.'),
+    ('Economic Inclusion Newsletter Q2', 'NEWSLETTER', 'ECONOMIC_INCLUSION', 'COMPLETED',
+     'Dodoma CC', -35, 1, 'TASAF HQ, Dodoma', 2000, 2350,
+     [('Distribute the quarterly newsletter', 'Copies distributed', 'copies', 2000, 2350)],
+     [('STAFF', 400, 450), ('NATIONAL_DIRECTORATE', 100, 90), ('PUBLIC', 1500, 1810)],
+     'Quarterly newsletter on savings groups and livelihood grants.'),
+    ('PCT Results Press Release', 'PRESS_RELEASE', 'CONTENT_REPORTING', 'CLOSED',
+     'Dodoma CC', -80, 1, 'TASAF HQ, Dodoma', 30, 34,
+     [('Issue the press release to national media', 'Outlets reached', 'outlets', 30, 34)],
+     [('EDITOR', 30, 34)],
+     'Release of the productive cash transfer results for the last cycle.'),
+    ('Parliamentary Committee Field Visit', 'STAKEHOLDER_BRIEFING', 'STAKEHOLDER_ENGAGEMENT', 'ARCHIVED',
+     'Morogoro MC', -180, 2, 'Morogoro Region', 25, 22,
+     [('Show the committee three project sites', 'Sites visited', 'sites', 3, 3)],
+     [('PARLIAMENTARY_COMMITTEE', 15, 13), ('MP', 10, 9)],
+     'Committee visit to public works and livelihood sites.'),
+    ('Tanga Branding Materials Rollout', 'BRANDING', 'GENERAL', 'CANCELLED',
+     'Tanga', 10, 2, 'Tanga Region', 0, None,
+     [('Install signboards at PAA offices', 'Signboards installed', 'signboards', 20, None)],
+     [('TMO', 10, None)],
+     'Cancelled: the new brand guidelines were not yet approved.'),
 ]
 
 # (activity_index, media_house, invited, attended, reported, quality, coverage_type, day_offset)
@@ -110,9 +170,12 @@ class Command(BaseCommand):
             self._seed(user)
 
     def _purge(self):
-        # coverage first: it points at both houses and journalists
+        # children first: coverage, objectives and audiences all point at the activities
         cov = ActivityMediaHouse.objects.filter(json_ext___seed='demo').delete()[0]
-        acts = CommunicationActivity.objects.filter(json_ext___seed='demo').delete()[0]
+        demo_acts = CommunicationActivity.objects.filter(json_ext___seed='demo')
+        ActivityObjective.objects.filter(activity__in=demo_acts).delete()
+        ActivityAudience.objects.filter(activity__in=demo_acts).delete()
+        acts = demo_acts.delete()[0]
         self.stdout.write(self.style.SUCCESS(
             f'Purged demo rows - coverage: {cov}, activities: {acts}'))
 
@@ -121,9 +184,52 @@ class Command(BaseCommand):
 
     def _seed(self, user):
         created_a, created_c = self._seed_coverage(user)
+        created_p = self._seed_pipeline(user)
         self.stdout.write(self.style.SUCCESS(
-            f'Activities created: {created_a}' + chr(10)
+            f'Activities created: {created_a + created_p}' + chr(10)
             + f'Coverage rows:      {created_c}'))
+
+    def _seed_pipeline(self, user):
+        """Activities in every status, written straight to that status (demo data, not a workflow
+        test), with objectives and audiences so the detail tabs are not empty."""
+        act_service = CommunicationActivityService(user)
+        categories = {c.code: c for c in ActivityCategory.objects.filter(is_deleted=False)}
+        stakeholders = {t.code: t for t in StakeholderType.objects.filter(is_deleted=False)}
+        today = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0)
+        created = 0
+        for (title, atype, category, status, district, offset, days, venue, planned, actual,
+             objectives, audiences, description) in DEMO_PIPELINE:
+            if CommunicationActivity.objects.filter(title=title, is_deleted=False).exists():
+                continue
+            start = today + timedelta(days=offset)
+            loc = self._district(district)
+            cat = categories.get(category)
+            res = act_service.create({
+                'title': title, 'activity_type': atype, 'status': status,
+                'category_id': cat.id if cat else None,
+                'start_datetime': start, 'end_datetime': start + timedelta(days=days, hours=-1),
+                'venue': venue, 'location_id': loc.id if loc else None,
+                'planned_audience_count': planned or None, 'actual_audience_count': actual,
+                'objective_summary': objectives[0][0], 'description': description,
+                'json_ext': dict(DEMO),
+            })
+            if not res['success']:
+                self.stderr.write(f'{title}: {res.get("message")} {res.get("detail", "")}')
+                continue
+            activity = CommunicationActivity.objects.get(id=res['data']['id'])
+            for desc, indicator, unit, target, achieved in objectives:
+                ActivityObjective(
+                    activity=activity, description=desc, indicator=indicator, unit=unit,
+                    target_value=target, achieved_value=achieved, json_ext=dict(DEMO),
+                ).save(user=user)
+            for code, planned_n, actual_n in audiences:
+                if code in stakeholders:
+                    ActivityAudience(
+                        activity=activity, stakeholder_type=stakeholders[code],
+                        planned_count=planned_n or None, actual_count=actual_n, json_ext=dict(DEMO),
+                    ).save(user=user)
+            created += 1
+        return created
 
 
     def _seed_coverage(self, user):
