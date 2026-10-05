@@ -75,11 +75,11 @@ def _check(user, perms):
 
 def _location_filter(parent_location, parent_location_level):
     from location.apps import LocationConfig
-    query_key = "uuid"
-    for _i in range(len(LocationConfig.location_types) - parent_location_level - 1):
-        query_key = "parent__" + query_key
-    query_key = "location__" + query_key
-    return Q(**{query_key: parent_location})
+    q, key = Q(), "location__uuid"
+    for _i in range(len(LocationConfig.location_types)):
+        q |= Q(**{key: parent_location})
+        key = key.replace("location__", "location__parent__", 1)
+    return q
 
 
 class Query(graphene.ObjectType):
