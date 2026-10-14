@@ -7,6 +7,7 @@ stub. ``ConflictService`` / ``ActivitySummaryService`` are read services. Patter
 the ``training`` module.
 """
 import logging
+import re
 from datetime import timedelta
 
 from django.db import transaction
@@ -308,6 +309,45 @@ class ActivityParticipantService(BaseService):
         row = ActivityParticipant.objects.filter(id=row_id).only('activity_id').first()
         if row:
             recompute_participant_count(row.activity_id)
+
+    @staticmethod
+    def _person_key(name, organization, phone):
+        digits = re.sub(r'\D', '', phone or '')
+        if len(digits) >= 9:
+            return ('phone', digits[-9:])
+        return ('name', (name or '').strip().lower(), (organization or '').strip().lower())
+
+    @transaction.atomic
+    def add_from_stakeholder_list(self, activity_id, stakeholder_list_id):
+        """Invite every member of a stakeholder list; people already on the register are skipped."""
+        try:
+            if not CommunicationActivity.objects.filter(id=activity_id, is_deleted=False).exists():
+                return {"success": False, "message": _("communications.validation.not_found"),
+                        "detail": str(activity_id)}
+            entries = StakeholderListEntry.objects.filter(
+                stakeholder_list_id=stakeholder_list_id, is_deleted=False,
+                stakeholder_list__is_deleted=False)
+            seen = {
+                self._person_key(p.full_name, p.organization, p.phone)
+                for p in ActivityParticipant.objects.filter(activity_id=activity_id, is_deleted=False)
+            }
+            added = 0
+            for e in entries:
+                key = self._person_key(e.name, e.organization, e.phone)
+                if key in seen:
+                    continue
+                seen.add(key)
+                ActivityParticipant(
+                    activity_id=activity_id, full_name=e.name, organization=e.organization,
+                    phone=e.phone, email=e.email, location_id=e.location_id,
+                    attendance_status=AttendanceStatus.INVITED,
+                ).save(username=self.user.username)
+                added += 1
+            if added:
+                recompute_participant_count(activity_id)
+            return {"success": True, "message": "Ok", "data": {"added": added, "skipped": entries.count() - added}}
+        except Exception as exc:
+            return output_exception(model_name='ActivityParticipant', method="add_from_list", exception=exc)
 
 
 class ActivityMediaHouseService(BaseService):

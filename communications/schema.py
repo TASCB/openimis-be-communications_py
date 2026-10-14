@@ -64,7 +64,7 @@ from communications.gql_mutations import (
     CreateActivityMediaHouseMutation, UpdateActivityMediaHouseMutation,
     DeleteActivityMediaHouseMutation,
     CreateActivityParticipantMutation, UpdateActivityParticipantMutation,
-    DeleteActivityParticipantMutation,
+    DeleteActivityParticipantMutation, AddActivityParticipantsFromListMutation,
 )
 
 
@@ -412,6 +412,7 @@ class Mutation(graphene.ObjectType):
 
     create_activity_participant = CreateActivityParticipantMutation.Field()
     update_activity_participant = UpdateActivityParticipantMutation.Field()
+    add_activity_participants_from_list = AddActivityParticipantsFromListMutation.Field()
     delete_activity_participant = DeleteActivityParticipantMutation.Field()
 
     create_activity_media_house = CreateActivityMediaHouseMutation.Field()

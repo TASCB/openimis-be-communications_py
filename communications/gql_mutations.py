@@ -1635,6 +1635,27 @@ class CreateActivityParticipantMutation(BaseHistoryModelCreateMutationMixin, Bas
         pass
 
 
+class AddActivityParticipantsFromListMutation(BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "AddActivityParticipantsFromListMutation"
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        if not user.has_perms(CommunicationsConfig.gql_participant_create_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        _strip_client(data)
+        res = ActivityParticipantService(user).add_from_stakeholder_list(
+            data.get('activity_id'), data.get('stakeholder_list_id'))
+        return res if not res['success'] else None
+
+    class Input(OpenIMISMutation.Input):
+        activity_id = graphene.UUID(required=True)
+        stakeholder_list_id = graphene.UUID(required=True)
+
+
 class UpdateActivityParticipantMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     _mutation_module = "communications"
     _mutation_class = "UpdateActivityParticipantMutation"
