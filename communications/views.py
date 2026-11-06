@@ -25,6 +25,18 @@ from communications.services import (
 logger = logging.getLogger(__name__)
 
 
+def upload_error(upload):
+    """Why an upload is refused (type or size), or None when it is acceptable."""
+    ext = upload.name.rsplit('.', 1)[-1].lower() if '.' in upload.name else ''
+    allowed = CommunicationsConfig.upload_allowed_extensions
+    if allowed and ext not in allowed:
+        return f'File type .{ext or "?"} is not allowed. Allowed: {", ".join(allowed)}'
+    max_mb = CommunicationsConfig.upload_max_mb
+    if max_mb and upload.size > max_mb * 1024 * 1024:
+        return f'File is larger than {max_mb} MB'
+    return None
+
+
 class ActivityAttachmentUploadView(views.APIView):
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [check_user_rights(CommunicationsConfig.gql_attachment_upload_perms)]
@@ -35,6 +47,8 @@ class ActivityAttachmentUploadView(views.APIView):
             upload = request.FILES.get('file')
             if not activity_id or not upload:
                 return Response({'success': False, 'error': 'activity_id and file are required'}, status=400)
+            if upload_error(upload):
+                return Response({'success': False, 'error': upload_error(upload)}, status=400)
             if not CommunicationActivity.objects.filter(id=activity_id, is_deleted=False).exists():
                 return Response({'success': False, 'error': 'activity not found'}, status=404)
             payload = {
@@ -64,6 +78,8 @@ class LibraryAssetUploadView(views.APIView):
             name = request.data.get('name')
             if not upload or not code or not name:
                 return Response({'success': False, 'error': 'code, name and file are required'}, status=400)
+            if upload_error(upload):
+                return Response({'success': False, 'error': upload_error(upload)}, status=400)
             payload = {
                 'code': code,
                 'name': name,
@@ -123,6 +139,8 @@ class PostAttachmentUploadView(views.APIView):
             upload = request.FILES.get('file')
             if not upload:
                 return Response({'success': False, 'error': 'file is required'}, status=400)
+            if upload_error(upload):
+                return Response({'success': False, 'error': upload_error(upload)}, status=400)
             if not post_id and not is_inline:
                 return Response({'success': False, 'error': 'post_id is required'}, status=400)
             if post_id and not CommunicationPost.objects.filter(id=post_id, is_deleted=False).exists():

@@ -43,7 +43,7 @@ from communications.services import (
     StakeholderTypeService, ActivityAudienceService, CommunicationPostService,
     CommunicationPostAttachmentService, ConflictService,
     MediaHouseCategoryService, MediaHouseService, JournalistService,
-    ActivityMediaHouseService, ActivityParticipantService,
+    ActivityMediaHouseService, ActivityParticipantService, PLANNING_OPEN_STATUSES,
 )
 
 
@@ -147,6 +147,9 @@ def _enforce_activity_conflicts(user, data):
     staff_ids = data.pop('conflict_staff_user_ids', None)
     if not CommunicationsConfig.conflict_check_enabled:
         return None
+    if data.get('id') and CommunicationActivity.objects.filter(id=data['id']).exclude(
+            status__in=PLANNING_OPEN_STATUSES).exists():
+        return None  # dates are frozen after Submit; only results are being saved
     conflicts = ConflictService(user).check(
         start=data.get('start_datetime'), end=data.get('end_datetime'),
         activity_id=data.get('id'), location_id=data.get('location_id'),
@@ -254,9 +257,13 @@ class _TransitionLogic:
 
     @classmethod
     def _mutate(cls, user, **data):
+        client_mutation_id = data.get('client_mutation_id')
         _strip_client(data)
         res = CommunicationActivityService(user).transition(
             data.get('id'), cls._action, reason=data.get('reason'))
+        if res['success']:
+            _journal(CommunicationActivityMutation, 'communication_activity', user, client_mutation_id,
+                     CommunicationActivity.objects.filter(id=data.get('id')).first())
         return res if not res['success'] else None
 
 
@@ -1209,6 +1216,34 @@ class UnpublishPostMutation(_PostPublishLogic, BaseMutation):
     _mutation_module = "communications"
     _mutation_class = "UnpublishPostMutation"
     _published = False
+
+    class Input(OpenIMISMutation.Input):
+        id = graphene.UUID(required=True)
+
+
+class _PostPinLogic(_PostPublishLogic):
+    _pinned = True
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        _strip_client(data)
+        res = CommunicationPostService(user).set_pinned(data.get('id'), cls._pinned)
+        return res if not res['success'] else None
+
+
+class PinPostMutation(_PostPinLogic, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "PinPostMutation"
+    _pinned = True
+
+    class Input(OpenIMISMutation.Input):
+        id = graphene.UUID(required=True)
+
+
+class UnpinPostMutation(_PostPinLogic, BaseMutation):
+    _mutation_module = "communications"
+    _mutation_class = "UnpinPostMutation"
+    _pinned = False
 
     class Input(OpenIMISMutation.Input):
         id = graphene.UUID(required=True)

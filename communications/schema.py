@@ -55,7 +55,8 @@ from communications.gql_mutations import (
     CreateStakeholderTypeMutation, UpdateStakeholderTypeMutation, DeleteStakeholderTypeMutation,
     CreateActivityAudienceMutation, UpdateActivityAudienceMutation, DeleteActivityAudienceMutation,
     CreatePostMutation, UpdatePostMutation, DeletePostMutation,
-    PublishPostMutation, UnpublishPostMutation, DeletePostAttachmentMutation,
+    PublishPostMutation, UnpublishPostMutation, PinPostMutation, UnpinPostMutation,
+    DeletePostAttachmentMutation,
     DismissAnnouncementMutation, SubmitPostForApprovalMutation,
     CreateMediaHouseCategoryMutation, UpdateMediaHouseCategoryMutation,
     DeleteMediaHouseCategoryMutation,
@@ -288,9 +289,9 @@ class Query(graphene.ObjectType):
             wait_for_mutation(client_mutation_id)
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
 
-        # Drafts (pending approval) are visible to approvers only.
-        if not info.context.user.has_perms(CommunicationsConfig.gql_activity_approve_perms):
-            filters.append(Q(is_published=True))
+        user = info.context.user
+        if not user.has_perms(CommunicationsConfig.gql_post_publish_perms):
+            filters.append(Q(is_published=True) | Q(user_created_id=user.id))
         return gql_optimizer.query(
             CommunicationPost.objects.filter(*filters).order_by('-is_pinned', '-published_at', '-date_created'), info)
 
@@ -444,6 +445,8 @@ class Mutation(graphene.ObjectType):
     delete_communication_post = DeletePostMutation.Field()
     publish_communication_post = PublishPostMutation.Field()
     unpublish_communication_post = UnpublishPostMutation.Field()
+    pin_communication_post = PinPostMutation.Field()
+    unpin_communication_post = UnpinPostMutation.Field()
     delete_communication_post_attachment = DeletePostAttachmentMutation.Field()
     dismiss_announcement = DismissAnnouncementMutation.Field()
     submit_post_for_approval = SubmitPostForApprovalMutation.Field()

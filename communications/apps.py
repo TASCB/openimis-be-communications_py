@@ -82,7 +82,7 @@ DEFAULT_FLOWS = [
         'name': 'Communication post approval',
         'domain': 'communications.CommunicationPost',
         'steps': [
-            {'code': 'OFFICER', 'label': 'Communication Officer', 'required_right': '220110'},
+            {'code': 'PUBLISHER', 'label': 'Communications Manager', 'required_right': '221505'},
         ],
     },
 ]
@@ -182,6 +182,11 @@ DEFAULT_CONFIG = {
     'gql_participant_create_perms': ['221902'],
     'gql_participant_update_perms': ['221903'],
     'gql_participant_delete_perms': ['221904'],
+    'upload_max_mb': 25,
+    'upload_allowed_extensions': [
+        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'csv', 'txt',
+        'jpg', 'jpeg', 'png', 'gif', 'webp', 'mp3', 'mp4', 'mov', 'zip',
+    ],
     # Conflict detection (staff double-booking) — configurable
     'conflict_check_enabled': True,
     'conflict_hard_types': ['STAFF'],
@@ -297,6 +302,8 @@ class CommunicationsConfig(AppConfig):
     gql_participant_update_perms = []
     gql_participant_delete_perms = []
     # behaviour
+    upload_max_mb = 25
+    upload_allowed_extensions = []
     conflict_check_enabled = True
     conflict_hard_types = []
     conflict_soft_types = []

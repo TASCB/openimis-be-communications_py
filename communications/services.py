@@ -11,7 +11,7 @@ import re
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import Avg, Count, Sum
+from django.db.models import Avg, Count, Q, Sum
 from django.utils import timezone
 from django.utils.translation import gettext as _
 
@@ -84,22 +84,67 @@ def _json_safe_save_instance(self, obj_):
     return output_result_success(dict_representation=dict_repr)
 
 
-def _crud_service(name, object_type, validation_class, signal_prefix):
+# Plan rows change only in Draft/Rejected; result rows until Archived/Cancelled; split rows keep result fields.
+LOCK_PLANNING = 'planning'
+LOCK_RESULTS = 'results'
+LOCK_SPLIT = 'split'
+PLANNING_OPEN_STATUSES = (ActivityStatus.DRAFT, ActivityStatus.REJECTED)
+RESULTS_CLOSED_STATUSES = (ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED)
+
+
+def _locked(status):
+    message = _("This activity is %(status)s, so this part can no longer be changed.") % {
+        'status': str(status).lower()}
+    return {"success": False, "message": message, "detail": status}
+
+
+def _parent_activity_status(model, obj_data):
+    activity_id = obj_data.get('activity_id')
+    if not activity_id and obj_data.get('id'):
+        row = model.objects.filter(id=obj_data['id']).only('activity_id').first()
+        activity_id = row.activity_id if row else None
+    if not activity_id:
+        return None
+    return CommunicationActivity.objects.filter(id=activity_id).values_list('status', flat=True).first()
+
+
+def apply_activity_lock(model, obj_data, lock, operation, result_fields=()):
+    """None when the write may go ahead, else an error result (may drop non-result fields)."""
+    status = _parent_activity_status(model, obj_data)
+    if status is None or status in PLANNING_OPEN_STATUSES:
+        return None
+    if lock == LOCK_PLANNING or status in RESULTS_CLOSED_STATUSES:
+        return _locked(status)
+    if lock == LOCK_SPLIT:
+        if operation != 'update':
+            return _locked(status)
+        for key in list(obj_data):
+            if key not in ('id', *result_fields):
+                obj_data.pop(key)
+    return None
+
+
+def _crud_service(name, object_type, validation_class, signal_prefix, lock=None, result_fields=()):
     """Build a simple BaseService subclass with create/update/delete service signals."""
     def __init__(self, user, validation_class=validation_class):
         BaseService.__init__(self, user, validation_class)
 
+    def _guard(obj_data, operation):
+        if not lock:
+            return None
+        return apply_activity_lock(object_type, obj_data, lock, operation, result_fields)
+
     @register_service_signal(f'{signal_prefix}.create')
     def create(self, obj_data):
-        return BaseService.create(self, obj_data)
+        return _guard(obj_data, 'create') or BaseService.create(self, obj_data)
 
     @register_service_signal(f'{signal_prefix}.update')
     def update(self, obj_data):
-        return BaseService.update(self, obj_data)
+        return _guard(obj_data, 'update') or BaseService.update(self, obj_data)
 
     @register_service_signal(f'{signal_prefix}.delete')
     def delete(self, obj_data):
-        return BaseService.delete(self, obj_data)
+        return _guard(obj_data, 'delete') or BaseService.delete(self, obj_data)
 
     return type(name, (BaseService,), {
         'OBJECT_TYPE': object_type, '__init__': __init__,
@@ -113,15 +158,17 @@ ActivityCategoryService = _crud_service(
 ChannelService = _crud_service(
     'ChannelService', Channel, ChannelValidation, 'communications_channel_service')
 ActivityChannelService = _crud_service(
-    'ActivityChannelService', ActivityChannel, ActivityChannelValidation, 'communications_activity_channel_service')
+    'ActivityChannelService', ActivityChannel, ActivityChannelValidation, 'communications_activity_channel_service',
+    lock=LOCK_PLANNING)
 ActivityObjectiveService = _crud_service(
-    'ActivityObjectiveService', ActivityObjective, ActivityObjectiveValidation, 'communications_objective_service')
-ActivityAssignmentService = _crud_service(
-    'ActivityAssignmentService', ActivityAssignment, ActivityAssignmentValidation, 'communications_assignment_service')
+    'ActivityObjectiveService', ActivityObjective, ActivityObjectiveValidation, 'communications_objective_service',
+    lock=LOCK_SPLIT, result_fields=('achieved_value',))
 ActivityAttachmentService = _crud_service(
-    'ActivityAttachmentService', ActivityAttachment, ActivityAttachmentValidation, 'communications_attachment_service')
+    'ActivityAttachmentService', ActivityAttachment, ActivityAttachmentValidation, 'communications_attachment_service',
+    lock=LOCK_RESULTS)
 ActivityFeedbackService = _crud_service(
-    'ActivityFeedbackService', ActivityFeedback, ActivityFeedbackValidation, 'communications_feedback_service')
+    'ActivityFeedbackService', ActivityFeedback, ActivityFeedbackValidation, 'communications_feedback_service',
+    lock=LOCK_RESULTS)
 CommunicationTemplateService = _crud_service(
     'CommunicationTemplateService', CommunicationTemplate, CommunicationTemplateValidation, 'communications_template_service')
 StakeholderListService = _crud_service(
@@ -138,6 +185,46 @@ CommunicationPostAttachmentService = _crud_service(
 MediaHouseCategoryService = _crud_service(
     'MediaHouseCategoryService', MediaHouseCategory, MediaHouseCategoryValidation,
     'communications_media_house_category_service')
+
+
+class ActivityAssignmentService(BaseService):
+    """Staff on an activity. Planning data, and a staff member cannot be double-booked."""
+    OBJECT_TYPE = ActivityAssignment
+
+    def __init__(self, user, validation_class=ActivityAssignmentValidation):
+        super().__init__(user, validation_class)
+
+    @register_service_signal('communications_assignment_service.create')
+    def create(self, obj_data):
+        return (apply_activity_lock(ActivityAssignment, obj_data, LOCK_PLANNING, 'create')
+                or self._clash(obj_data) or super().create(obj_data))
+
+    @register_service_signal('communications_assignment_service.update')
+    def update(self, obj_data):
+        return (apply_activity_lock(ActivityAssignment, obj_data, LOCK_PLANNING, 'update')
+                or self._clash(obj_data) or super().update(obj_data))
+
+    @register_service_signal('communications_assignment_service.delete')
+    def delete(self, obj_data):
+        return apply_activity_lock(ActivityAssignment, obj_data, LOCK_PLANNING, 'delete') or super().delete(obj_data)
+
+    def _clash(self, obj_data):
+        row = ActivityAssignment.objects.filter(id=obj_data.get('id')).first() if obj_data.get('id') else None
+        staff_id = obj_data.get('staff_user_id') or (row.staff_user_id if row else None)
+        status = obj_data.get('status') or (row.status if row else AssignmentStatus.ASSIGNED)
+        activity = CommunicationActivity.objects.filter(
+            id=obj_data.get('activity_id') or (row.activity_id if row else None)).first()
+        if not staff_id or not activity or status not in ACTIVE_ASSIGNMENT_STATUSES:
+            return None
+        hard = [c for c in ConflictService(self.user).check(
+            start=activity.start_datetime, end=activity.end_datetime, activity_id=activity.id,
+            staff_user_ids=[staff_id]) if c['hard']]
+        if hard:
+            return {"success": False, "message": _("communications.validation.hard_conflict"),
+                    "detail": " | ".join(c['message'] for c in hard)}
+        return None
+
+
 class MediaHouseService(BaseService):
     """Media-house registry. Codes are system-generated (``MH00001``), never user-supplied."""
     OBJECT_TYPE = MediaHouse
@@ -227,6 +314,9 @@ class ActivityAudienceService(BaseService):
     @register_service_signal('communications_audience_service.create')
     @transaction.atomic
     def create(self, obj_data):
+        err = apply_activity_lock(ActivityAudience, obj_data, LOCK_SPLIT, 'create')
+        if err:
+            return err
         res = super().create(obj_data)
         if res['success']:
             recompute_planned_audience(obj_data.get('activity_id'))
@@ -235,6 +325,9 @@ class ActivityAudienceService(BaseService):
     @register_service_signal('communications_audience_service.update')
     @transaction.atomic
     def update(self, obj_data):
+        err = apply_activity_lock(ActivityAudience, obj_data, LOCK_SPLIT, 'update', ('actual_count', 'notes'))
+        if err:
+            return err
         res = super().update(obj_data)
         if res['success']:
             self._recompute_for(obj_data.get('id'))
@@ -243,6 +336,9 @@ class ActivityAudienceService(BaseService):
     @register_service_signal('communications_audience_service.delete')
     @transaction.atomic
     def delete(self, obj_data):
+        err = apply_activity_lock(ActivityAudience, obj_data, LOCK_SPLIT, 'delete')
+        if err:
+            return err
         row = ActivityAudience.objects.filter(id=obj_data.get('id')).only('activity_id').first()
         activity_id = row.activity_id if row else None
         res = super().delete(obj_data)
@@ -281,6 +377,9 @@ class ActivityParticipantService(BaseService):
     @register_service_signal('communications_participant_service.create')
     @transaction.atomic
     def create(self, obj_data):
+        err = apply_activity_lock(ActivityParticipant, obj_data, LOCK_RESULTS, 'create')
+        if err:
+            return err
         res = super().create(obj_data)
         if res['success']:
             recompute_participant_count(obj_data.get('activity_id'))
@@ -289,6 +388,9 @@ class ActivityParticipantService(BaseService):
     @register_service_signal('communications_participant_service.update')
     @transaction.atomic
     def update(self, obj_data):
+        err = apply_activity_lock(ActivityParticipant, obj_data, LOCK_RESULTS, 'update')
+        if err:
+            return err
         res = super().update(obj_data)
         if res['success']:
             self._recompute_for(obj_data.get('id'))
@@ -297,6 +399,9 @@ class ActivityParticipantService(BaseService):
     @register_service_signal('communications_participant_service.delete')
     @transaction.atomic
     def delete(self, obj_data):
+        err = apply_activity_lock(ActivityParticipant, obj_data, LOCK_RESULTS, 'delete')
+        if err:
+            return err
         row = ActivityParticipant.objects.filter(id=obj_data.get('id')).only('activity_id').first()
         activity_id = row.activity_id if row else None
         res = super().delete(obj_data)
@@ -321,6 +426,9 @@ class ActivityParticipantService(BaseService):
     def add_from_stakeholder_list(self, activity_id, stakeholder_list_id):
         """Invite every member of a stakeholder list; people already on the register are skipped."""
         try:
+            err = apply_activity_lock(ActivityParticipant, {'activity_id': activity_id}, LOCK_RESULTS, 'create')
+            if err:
+                return err
             if not CommunicationActivity.objects.filter(id=activity_id, is_deleted=False).exists():
                 return {"success": False, "message": _("communications.validation.not_found"),
                         "detail": str(activity_id)}
@@ -360,6 +468,9 @@ class ActivityMediaHouseService(BaseService):
     @register_service_signal('communications_activity_media_house_service.create')
     @transaction.atomic
     def create(self, obj_data):
+        err = apply_activity_lock(ActivityMediaHouse, obj_data, LOCK_RESULTS, 'create')
+        if err:
+            return err
         res = super().create(obj_data)
         if res['success']:
             recompute_media_counters(obj_data.get('activity_id'))
@@ -368,6 +479,9 @@ class ActivityMediaHouseService(BaseService):
     @register_service_signal('communications_activity_media_house_service.update')
     @transaction.atomic
     def update(self, obj_data):
+        err = apply_activity_lock(ActivityMediaHouse, obj_data, LOCK_RESULTS, 'update')
+        if err:
+            return err
         res = super().update(obj_data)
         if res['success']:
             self._recompute_for(obj_data.get('id'))
@@ -376,6 +490,9 @@ class ActivityMediaHouseService(BaseService):
     @register_service_signal('communications_activity_media_house_service.delete')
     @transaction.atomic
     def delete(self, obj_data):
+        err = apply_activity_lock(ActivityMediaHouse, obj_data, LOCK_RESULTS, 'delete')
+        if err:
+            return err
         # read the parent before the row is soft-deleted
         row = ActivityMediaHouse.objects.filter(id=obj_data.get('id')).only('activity_id').first()
         activity_id = row.activity_id if row else None
@@ -398,12 +515,42 @@ class CommunicationPostService(BaseService):
         super().__init__(user, validation_class)
 
     @register_service_signal('communications_post_service.create')
+    @transaction.atomic
     def create(self, obj_data):
-        return super().create(self._sanitize_body(obj_data))
+        obj_data = self._sanitize_body(obj_data)
+        if not self._can_publish():
+            obj_data.pop('is_pinned', None)
+        res = super().create(obj_data)
+        if res['success']:
+            self._adopt_inline_images(res['data']['id'], obj_data.get('body'))
+        return res
 
     @register_service_signal('communications_post_service.update')
+    @transaction.atomic
     def update(self, obj_data):
-        return super().update(self._sanitize_body(obj_data))
+        obj_data = self._sanitize_body(obj_data)
+        if not self._can_publish():
+            obj_data.pop('is_pinned', None)
+            post = CommunicationPost.objects.filter(id=obj_data.get('id'), is_deleted=False).first()
+            if post and post.is_published and any(
+                    k in obj_data and obj_data[k] != getattr(post, k) for k in ('title', 'body', 'post_type')):
+                obj_data['is_published'] = False
+                obj_data['published_at'] = None
+        res = super().update(obj_data)
+        if res['success']:
+            self._adopt_inline_images(obj_data.get('id'), obj_data.get('body'))
+        return res
+
+    def _can_publish(self):
+        return bool(self.user) and self.user.has_perms(CommunicationsConfig.gql_post_publish_perms)
+
+    @staticmethod
+    def _adopt_inline_images(post_id, body):
+        """Link the inline images a body embeds to its post, so they are not left orphaned."""
+        ids = re.findall(r'/post-attachments/([0-9a-fA-F-]{36})/download', body or '')
+        if post_id and ids:
+            CommunicationPostAttachment.objects.filter(
+                id__in=ids, is_inline=True, post__isnull=True).update(post_id=post_id)
 
     @staticmethod
     def _sanitize_body(obj_data):
@@ -430,15 +577,38 @@ class CommunicationPostService(BaseService):
         except Exception as exc:
             return output_exception(model_name='CommunicationPost', method="set_published", exception=exc)
 
+    @register_service_signal('communications_post_service.pin')
+    def set_pinned(self, post_id, pinned=True):
+        try:
+            post = CommunicationPost.objects.filter(id=post_id, is_deleted=False).first()
+            if not post:
+                return {"success": False, "message": _("communications.validation.not_found"),
+                        "detail": str(post_id)}
+            post.is_pinned = pinned
+            post.save(username=self.user.username)
+            return {"success": True, "message": _("communications.post.success"),
+                    "data": model_representation(post)}
+        except Exception as exc:
+            return output_exception(model_name='CommunicationPost', method="set_pinned", exception=exc)
+
     def submit_for_approval(self, post_id):
         """Start the approval flow for a post; True when the request was raised."""
         try:
             from approval.services import ApprovalService
         except Exception:
             return False
+        from django.contrib.contenttypes.models import ContentType
+        from approval.models import ApprovalRequest, RequestStatus
         post = CommunicationPost.objects.filter(id=post_id, is_deleted=False).first()
-        if not post or not self.user:
+        if not post or not self.user or post.is_published:
             return False
+        if ApprovalRequest.objects.filter(
+                content_type=ContentType.objects.get_for_model(CommunicationPost), object_id=str(post.pk),
+                status=RequestStatus.PENDING, is_deleted=False).exists():
+            return False
+        if (post.json_ext or {}).get('approval_rejection_reason'):
+            json_ext = {k: v for k, v in post.json_ext.items() if k != 'approval_rejection_reason'}
+            CommunicationPost.objects.filter(id=post.id).update(json_ext=json_ext)
         summary = {
             'title': post.title,
             'post_type': post.get_post_type_display() if hasattr(post, 'get_post_type_display') else post.post_type,
@@ -447,6 +617,9 @@ class CommunicationPostService(BaseService):
         res = ApprovalService(self.user).request_approval(post, 'COMMUNICATION_POST_APPROVAL', summary=summary)
         return res.get('success', False) if res else False
 
+
+ACTIVITY_RESULT_FIELDS = ('actual_audience_count', 'media_houses_invited', 'media_houses_reported')
+MARK_SENT_STATUSES = (ActivityStatus.SCHEDULED, ActivityStatus.ONGOING, ActivityStatus.COMPLETED)
 
 # Allowed status transitions: action -> (from-states, to-state)
 STATUS_TRANSITIONS = {
@@ -474,11 +647,22 @@ class CommunicationActivityService(BaseService):
     @register_service_signal('communications_activity_service.create')
     @transaction.atomic
     def create(self, obj_data):
+        obj_data['status'] = ActivityStatus.DRAFT
         self._assign_code(obj_data)
         return super().create(obj_data)
 
     @register_service_signal('communications_activity_service.update')
     def update(self, obj_data):
+        # status changes only through transition()
+        obj_data.pop('status', None)
+        current = CommunicationActivity.objects.filter(
+            id=obj_data.get('id'), is_deleted=False).values_list('status', flat=True).first()
+        if current in RESULTS_CLOSED_STATUSES:
+            return _locked(current)
+        if current and current not in PLANNING_OPEN_STATUSES:
+            for key in list(obj_data):
+                if key not in ('id', *ACTIVITY_RESULT_FIELDS):
+                    obj_data.pop(key)
         return super().update(obj_data)
 
     @staticmethod
@@ -508,6 +692,13 @@ class CommunicationActivityService(BaseService):
                 return {"success": False,
                         "message": _("communications.validation.invalid_status_transition"),
                         "detail": f"{activity.status} -> {to_state} ({action})"}
+            if action in ('approve', 'reject') and activity.user_created_id == getattr(self.user, 'id', None):
+                return {"success": False,
+                        "message": _("You created this activity, so another person must approve or reject it.")}
+            if (action == 'cancel' and activity.status != ActivityStatus.DRAFT
+                    and not self.user.has_perms(CommunicationsConfig.gql_activity_approve_perms)):
+                return {"success": False,
+                        "message": _("Only an approver can cancel an activity after it has been approved.")}
             if action == 'schedule':
                 conflicts = ConflictService(self.user).check_for_activity(activity)
                 hard = [c for c in conflicts if c['hard']]
@@ -526,17 +717,21 @@ class CommunicationActivityService(BaseService):
 
     @register_service_signal('communications_activity_service.dispatch')
     def dispatch_channel(self, activity_channel_id, **ctx):
-        """Phase-1 "blast" stub: records dispatch state on an ActivityChannel.
-        Real Email/SMS/social adapters plug in here (Phase 2)."""
+        """Records that a channel's message was sent outside the MIS."""
         try:
-            ac = ActivityChannel.objects.filter(id=activity_channel_id, is_deleted=False).first()
+            ac = ActivityChannel.objects.filter(id=activity_channel_id, is_deleted=False).select_related(
+                'activity').first()
             if not ac:
                 return {"success": False, "message": _("communications.validation.not_found"),
                         "detail": str(activity_channel_id)}
+            if ac.activity.status not in MARK_SENT_STATUSES:
+                return {"success": False,
+                        "message": _("A channel can be marked as sent only once the activity is scheduled."),
+                        "detail": ac.activity.status}
             ac.dispatch_status = DispatchStatus.SENT
             ac.sent_at = timezone.now()
             ac.dispatch_detail = {**(ac.dispatch_detail or {}),
-                                  'stub': True, 'by': self.user.username}
+                                  'manual': True, 'by': self.user.username}
             ac.save(username=self.user.username)
             return {"success": True, "message": _("communications.dispatch.success"),
                     "data": model_representation(ac)}
@@ -615,7 +810,9 @@ class ActivitySummaryService:
         week_end = week_start + timedelta(days=7)
         qs = CommunicationActivity.objects.filter(is_deleted=False)
         if location_id:
-            qs = qs.filter(location_id=location_id)
+            qs = qs.filter(Q(location_id=location_id) | Q(location__parent_id=location_id)
+                           | Q(location__parent__parent_id=location_id)
+                           | Q(location__parent__parent__parent_id=location_id))
         if date_from:
             qs = qs.filter(start_datetime__gte=date_from)
         if date_to:
