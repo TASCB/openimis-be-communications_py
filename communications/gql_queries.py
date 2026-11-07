@@ -480,6 +480,7 @@ class CommunicationPostGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
     rejection_reason = graphene.String()
     approval_status = graphene.String()
+    can_publish = graphene.Boolean()
     attachments = graphene.List(CommunicationPostAttachmentGQLType)
 
     class Meta:
@@ -497,6 +498,15 @@ class CommunicationPostGQLType(DjangoObjectType):
             "version": ["exact"],
         }
         connection_class = ExtendedConnection
+
+    def resolve_can_publish(self, info):
+        """True when the current user may press Publish on this post now."""
+        from communications.apps import CommunicationsConfig
+        from communications.services import CommunicationPostService
+        user = info.context.user
+        if self.is_published or not user.has_perms(CommunicationsConfig.gql_post_publish_perms):
+            return False
+        return CommunicationPostService(user).publish_block_reason(self) is None
 
     def resolve_rejection_reason(self, info):
         if not self.json_ext:

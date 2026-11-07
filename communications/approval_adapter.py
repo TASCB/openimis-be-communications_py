@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 DOMAIN = 'communications.CommunicationPost'
 
 
+def _rejection_comment(appr):
+    """The approver's comment on the REJECTED decision; ``finalized`` does not carry it."""
+    from approval.models import ApprovalDecision
+    return (ApprovalDecision.objects.filter(
+        step__approval_request=appr, decision='REJECTED', is_deleted=False)
+        .order_by('-decided_at').values_list('comment', flat=True).first()) or ''
+
+
 class CommunicationPostApprovalAdapter:
 
     @staticmethod
@@ -40,13 +48,15 @@ class CommunicationPostApprovalAdapter:
 
             decision = data.get('decision')
             if decision == 'APPROVED':
+                json_ext = {k: v for k, v in (post.json_ext or {}).items() if k != 'needs_approval'}
                 CommunicationPost.objects.filter(id=post.id).update(
                     is_published=True,
-                    published_at=timezone.now()
+                    published_at=timezone.now(),
+                    json_ext=json_ext,
                 )
                 logger.info("communication_post %s -> PUBLISHED via approval engine", post.id)
             elif decision == 'REJECTED':
-                reason = data.get('reason', '')
+                reason = data.get('reason') or _rejection_comment(appr)
                 json_ext = post.json_ext or {}
                 json_ext['approval_rejection_reason'] = reason
                 CommunicationPost.objects.filter(id=post.id).update(

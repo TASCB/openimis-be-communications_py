@@ -532,10 +532,13 @@ class CommunicationPostService(BaseService):
         if not self._can_publish():
             obj_data.pop('is_pinned', None)
             post = CommunicationPost.objects.filter(id=obj_data.get('id'), is_deleted=False).first()
-            if post and post.is_published and any(
+            if post and any(
                     k in obj_data and obj_data[k] != getattr(post, k) for k in ('title', 'body', 'post_type')):
-                obj_data['is_published'] = False
-                obj_data['published_at'] = None
+                if post.is_published:
+                    obj_data['is_published'] = False
+                    obj_data['published_at'] = None
+                if self._post_requests(post).filter(status='APPROVED').exists():
+                    obj_data['json_ext'] = {**(post.json_ext or {}), 'needs_approval': True}
         res = super().update(obj_data)
         if res['success']:
             self._adopt_inline_images(obj_data.get('id'), obj_data.get('body'))
@@ -562,6 +565,31 @@ class CommunicationPostService(BaseService):
     def delete(self, obj_data):
         return super().delete(obj_data)
 
+    @staticmethod
+    def _post_requests(post):
+        try:
+            from approval.models import ApprovalRequest
+        except ImportError:
+            return None
+        from django.contrib.contenttypes.models import ContentType
+        return ApprovalRequest.objects.filter(
+            content_type=ContentType.objects.get_for_model(CommunicationPost), object_id=str(post.pk),
+            is_deleted=False).order_by('-date_created')
+
+    def publish_block_reason(self, post):
+        """Why ``self.user`` may not publish ``post`` directly, or None."""
+        requests = self._post_requests(post)
+        if requests is None:
+            return None
+        if requests.filter(status='PENDING').exists():
+            return _("This post is waiting for approval. Approve or reject it in Approvals.")
+        if getattr(self.user, 'is_imis_admin', False):
+            return None
+        latest = requests.first()
+        if not latest or latest.status != 'APPROVED' or (post.json_ext or {}).get('needs_approval'):
+            return _("This post has not been approved. The writer must submit it for approval first.")
+        return None
+
     @register_service_signal('communications_post_service.publish')
     def set_published(self, post_id, published=True):
         try:
@@ -569,6 +597,9 @@ class CommunicationPostService(BaseService):
             if not post:
                 return {"success": False, "message": _("communications.validation.not_found"),
                         "detail": str(post_id)}
+            reason = self.publish_block_reason(post) if published and not post.is_published else None
+            if reason:
+                return {"success": False, "message": reason}
             post.is_published = published
             post.published_at = timezone.now() if published else None
             post.save(username=self.user.username)
@@ -663,6 +694,8 @@ class CommunicationActivityService(BaseService):
             for key in list(obj_data):
                 if key not in ('id', *ACTIVITY_RESULT_FIELDS):
                     obj_data.pop(key)
+            if not any(key in obj_data for key in ACTIVITY_RESULT_FIELDS):
+                return _locked(current)
         return super().update(obj_data)
 
     @staticmethod
@@ -699,6 +732,10 @@ class CommunicationActivityService(BaseService):
                     and not self.user.has_perms(CommunicationsConfig.gql_activity_approve_perms)):
                 return {"success": False,
                         "message": _("Only an approver can cancel an activity after it has been approved.")}
+            if (action == 'cancel' and activity.status == ActivityStatus.DRAFT
+                    and not self.user.has_perms(CommunicationsConfig.gql_activity_update_perms)):
+                return {"success": False,
+                        "message": _("Only the people who edit activities can cancel a draft.")}
             if action == 'schedule':
                 conflicts = ConflictService(self.user).check_for_activity(activity)
                 hard = [c for c in conflicts if c['hard']]

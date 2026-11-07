@@ -249,10 +249,15 @@ class _TransitionLogic:
 
     @classmethod
     def _validate_mutation(cls, user, **data):
-        perms = (CommunicationsConfig.gql_activity_approve_perms
-                 if cls._action in ('approve', 'reject')
-                 else CommunicationsConfig.gql_activity_update_perms)
-        if not user.has_perms(perms):
+        approve = CommunicationsConfig.gql_activity_approve_perms
+        update = CommunicationsConfig.gql_activity_update_perms
+        if cls._action in ('approve', 'reject'):
+            allowed = user.has_perms(approve)
+        elif cls._action == 'cancel':
+            allowed = user.has_perms(approve) or user.has_perms(update)
+        else:
+            allowed = user.has_perms(update)
+        if not allowed:
             raise PermissionDenied(_("unauthorized"))
 
     @classmethod
